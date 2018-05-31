@@ -1,0 +1,41 @@
+From 2afcfc13e6cbdee1fac8f7f8579cc674a0f7ecef Mon Sep 17 00:00:00 2001
+From: Brian Norris <computersforpeace@gmail.com>
+Date: Mon, 23 Feb 2015 13:07:22 -0800
+Subject: UBI: fix missing brace control flow
+
+[ Upstream commit b388e6a7a6ba988998ddd83919ae8d3debf1a13d ]
+
+commit 0e707ae79ba3 ("UBI: do propagate positive error codes up") seems
+to have produced an unintended change in the control flow here.
+
+Completely untested, but it looks obvious.
+
+Caught by Coverity, which didn't like the indentation. CID 1271184.
+
+Signed-off-by: Brian Norris <computersforpeace@gmail.com>
+Cc: Dan Carpenter <dan.carpenter@oracle.com>
+Signed-off-by: Richard Weinberger <richard@nod.at>
+Signed-off-by: Sasha Levin <sasha.levin@oracle.com>
+---
+ drivers/mtd/ubi/eba.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/mtd/ubi/eba.c b/drivers/mtd/ubi/eba.c
+index 34c9e31..fce8151 100644
+--- a/drivers/mtd/ubi/eba.c
++++ b/drivers/mtd/ubi/eba.c
+@@ -425,9 +425,10 @@ retry:
+ 					ubi_warn(ubi, "corrupted VID header at PEB %d, LEB %d:%d",
+ 						 pnum, vol_id, lnum);
+ 					err = -EBADMSG;
+-				} else
++				} else {
+ 					err = -EINVAL;
+ 					ubi_ro_mode(ubi);
++				}
+ 			}
+ 			goto out_free;
+ 		} else if (err == UBI_IO_BITFLIPS)
+-- 
+cgit v1.1
+

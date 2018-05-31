@@ -1,0 +1,12 @@
+Index: e2fsprogs-1.42.8/lib/blkid/devname.c
+===================================================================
+--- e2fsprogs-1.42.8.orig/lib/blkid/devname.c
++++ e2fsprogs-1.42.8/lib/blkid/devname.c
+@@ -12,6 +12,7 @@
+  */
+ 
+ #define _GNU_SOURCE 1
++#include <sys/sysmacros.h>
+ 
+ #include "config.h"
+ #include <stdio.h>

@@ -1,0 +1,7 @@
+SOURCE : Berkeley DB lib package took from Openwrt libs packages.
+SOURCE PATH : https://dev.openwrt.org/browser/packages/libs/db47?rev=33912
+SUPPORT : Berkeley DB library
+CHANGES:
+No Changes
+
+

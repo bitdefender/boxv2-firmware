@@ -1,0 +1,42 @@
+--- a/lua.c
++++ b/lua.c
+@@ -201,6 +201,29 @@ static int uh_lua_state_unlock(lua_State
+ 	return 0;
+ }
+ 
++static int uh_lua_async_run(lua_State *L)
++{
++	int pid;
++
++	if (lua_isstring(L, 1) != 1)
++		return 1;
++	const char* fn = lua_tostring(L, 1);
++
++	pid = fork();
++	if (pid < 0)
++		return pid;
++
++	if (pid == 0) {
++	close(0);
++		close(1);
++		lua_getglobal(L, fn);
++		lua_call(L, 0, 0);
++		exit(0);
++	}
++
++	return 0;
++}
++
+ static int uh_lua_recv(lua_State *L)
+ {
+ 	static struct pollfd pfd = {
+@@ -340,6 +363,9 @@ static lua_State *uh_lua_state_init(void
+ 	lua_pushcfunction(L, uh_lua_state_unlock);
+ 	lua_setfield(L, -2, "state_unlock");
+ 
++	lua_pushcfunction(L, uh_lua_async_run);
++	lua_setfield(L, -2, "async_run");
++
+ 	lua_pushcfunction(L, uh_lua_urldecode);
+ 	lua_setfield(L, -2, "urldecode");
+ 

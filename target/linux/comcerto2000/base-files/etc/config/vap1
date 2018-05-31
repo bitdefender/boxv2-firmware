@@ -1,0 +1,11 @@
+config wifi-vap vap1
+	option interface       ''
+	option disabled        '1'
+	option radio_type      'radio1'
+	option ssid            'Openwrt-mspd-vap1'
+	option hidden_ssid     '0'
+	option authentication  'Open'
+	option encryption      'none'
+	option ipaddr          '192.168.4.1'
+	option netmask         '255.255.255.0'
+

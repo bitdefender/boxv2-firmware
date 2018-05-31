@@ -1,0 +1,16 @@
+#
+choice
+	prompt "Linux Kernel Version" if DEVEL
+	default LINUX_3_2
+
+config LINUX_3_2
+	bool "Linux Kernel 3.2"
+	help
+	  Select Linux Kernel 3.2 
+
+config LINUX_3_19
+	bool "Linux Kernel 3.19"
+	help
+	  Select Linux Kernel 3.19
+endchoice
+

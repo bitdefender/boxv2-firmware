@@ -1,0 +1,16 @@
+#!/bin/sh /etc/rc.common
+
+START=90
+#STOP=90
+
+start() {
+        mkdir -p /var/run/rdnssd
+        
+	#Start the rdnss daemon 
+	#rdnssd -u root -H /etc/merge-hook 
+}
+
+#stop() {
+#	# Kill the rdnssd , It will kill both parent and child process.
+#	# killall rdnssd
+#}

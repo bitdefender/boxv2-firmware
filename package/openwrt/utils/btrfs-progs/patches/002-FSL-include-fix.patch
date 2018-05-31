@@ -1,0 +1,10 @@
+--- a/btrfsck.c	2009-06-11 18:56:15.000000000 +0200
++++ b/btrfsck.c	2013-09-18 14:09:48.192818111 +0200
+@@ -21,6 +21,7 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <fcntl.h>
++#include <sys/stat.h>
+ #include "kerncompat.h"
+ #include "ctree.h"
+ #include "disk-io.h"

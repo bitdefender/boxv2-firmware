@@ -1,0 +1,117 @@
+diff -Naur igmpproxy-0.1/src/rttable.c igmpproxy-0.1-Mod-1/src/rttable.c
+--- igmpproxy-0.1/src/rttable.c	2009-05-14 01:13:18.000000000 +0530
++++ igmpproxy-0.1-Mod-1/src/rttable.c	2015-03-13 19:13:21.277554876 +0530
+@@ -37,8 +37,19 @@
+ *     recieved request.
+ */
+ 
++
++#ifndef MC4_CHANGES
++#define MC4_CHANGES 1
++#endif
+ #include "igmpproxy.h"
+-    
++#if MC4_CHANGES
++#include <linux/if_vlan.h>
++#include <sys/socket.h>
++#include <linux/sockios.h>
++#include <sys/types.h>
++#include <sys/ioctl.h>
++#include <string.h>
++#endif    
+ /**
+ *   Routing table structure definition. Double linked list...
+ */
+@@ -65,6 +76,9 @@
+ // Prototypes
+ void logRouteTable(char *header);
+ int  internAgeRoute(struct RouteTable*  croute);
++#if MC4_CHANGES
++int IsIfVlan(unsigned char * ifName);
++#endif
+ int internUpdateKernelRoute(struct RouteTable *route, int activate);
+ 
+ // Socket for sending join or leave requests.
+@@ -577,6 +591,57 @@
+     return result;
+ }
+ 
++#if MC4_CHANGES
++/* This function checks if the given interface is VLAN if or not
++ * If its VLAN interface the forwarding is done by FPP
++ * so we disable forwarding on those interfaces by Linux
++ * The only interface allowed is wifi(ath0) interface
++ */
++int IsIfVlan(unsigned char * ifName)
++{
++	int err, rc = 1;
++	struct vlan_ioctl_args if_request;
++	int vlan_fd;
++       
++	memset(&if_request, 0, sizeof(if_request));
++
++	/*Open a socket fd */
++	if ((vlan_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
++	{
++		my_log(LOG_DEBUG, 0,  "%s:, Unable to create a soket\n", __func__);
++		return 0;
++	}   
++
++/*
++ * Check if the interface has real device, then its VLAN interface
++*/
++	if_request.cmd = GET_VLAN_REALDEV_NAME_CMD;
++	strcpy(if_request.device1, ifName);
++
++	if ((err = ioctl(vlan_fd, SIOCGIFVLAN, &if_request)) < 0)
++	{
++	switch(errno)
++	{
++	case EINVAL:
++		my_log(LOG_DEBUG, 0, "EINVAL\n");
++		rc = 0;
++		break;
++	case ENODEV:
++		my_log(LOG_DEBUG, 0, "%s: Warning, Found no information about %s interface\n", __func__, ifName);
++		rc = 0;
++		break;
++	default:
++		my_log(LOG_DEBUG, 0, "%s: ioctl error %d\n", __func__, errno);
++		rc = 0;
++		break;
++	}
++	}
++	my_log(LOG_DEBUG, 0, "Real devname:%s\n",if_request.u.device2);
++	close(vlan_fd);
++	return rc;
++}
++#endif
++
+ /**
+ *   Updates the Kernel routing table. If activate is 1, the route
+ *   is (re-)activated. If activate is false, the route is removed.
+@@ -603,9 +668,21 @@
+             if(Dp->state == IF_STATE_UPSTREAM) {
+                 mrDesc.InVif = Dp->index;
+             }
+-            else if(BIT_TST(route->vifBits, Dp->index)) {
+-                my_log(LOG_DEBUG, 0, "Setting TTL for Vif %d to %d", Dp->index, Dp->threshold);
+-                mrDesc.TtlVc[ Dp->index ] = Dp->threshold;
++	else if(BIT_TST(route->vifBits, Dp->index)) {
++	my_log(LOG_DEBUG, 0, "Setting TTL for %s (Vif) %d to %d", Dp->Name, Dp->index, Dp->threshold);
++#if MC4_CHANGES
++		/* If its ethernet interface then forwarding is done by FPP, also check if its VLAN
++		* interface since that is also taken care by FPP*/
++	if(!strncasecmp(Dp->Name,"eth",3)|| IsIfVlan(Dp->Name)) {
++	my_log(LOG_DEBUG, 0, "Setting TTL for %s (Vif) %d to %d", Dp->Name, Dp->index, 255);
++		/* Setting ttl vector as 255 means kernel will not forward on that interface */
++		mrDesc.TtlVc[ Dp->index ] = 255;
++	} else 
++		mrDesc.TtlVc[ Dp->index ] = Dp->threshold;
++#else
++		mrDesc.TtlVc[ Dp->index ] = Dp->threshold;
++#endif
++
+             }
+         }
+     

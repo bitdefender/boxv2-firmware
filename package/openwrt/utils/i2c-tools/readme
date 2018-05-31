@@ -1,0 +1,7 @@
+SOURCE:https://github.com/marcin1j/openwrt-packages/tree/master/utils/i2c-tools
+commit d3e8e0543c47feb0fda456642dc1ed63b32a18f3
+Merge: 223aa07 718f165
+Author: Steven Barth <steven@midlink.org>
+Date:   Tue Sep 1 15:36:41 2015 +0200
+
+    Merge pull request #1748 from sairon/libevent-fix-cve-2014-6272

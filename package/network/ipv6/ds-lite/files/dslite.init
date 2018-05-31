@@ -1,0 +1,88 @@
+#!/bin/sh /etc/rc.common
+# dslite - IPv4-in-IPv6 tunnel backend
+# Copyright (c) 2013 OpenWrt.org
+
+#START=99
+
+proto_dslite_setup() {
+	local cfg="$1"
+	local tunlink="$2"
+	local link="dslite-$cfg"
+
+	local mtu ttl peeraddr ip6addr ifname
+
+	config_get peeraddr $cfg peeraddr
+	[ -z "$peeraddr" ] && {
+		echo  "$cfg: MISSING PEERADDRESS"
+		return
+	}
+
+	config_get ip6addr $cfg ip6addr
+	[ -z "$ip6addr" ] && {
+		local addr mask
+		if [ -z "$tunlink" ]; then
+			echo "$cfg: NO_WAN_LINK"
+			return
+		fi
+
+		addr=`uci get dhcpv6.${tunlink}.ipv6_address`
+		[ -z "$addr" ] && {
+			echo "$cfg: NO_WAN_LINK"
+			return
+		}
+		ip6addr="${addr%%/*}"
+		addr="${addr#*/}"
+		mask="${addr%%,*}"
+	}
+
+	config_get ifname $cfg ifname
+	[ -z "$ifname" ] && {
+		if [ -z "$tunlink" ]; then
+			echo "$cfg: NO_WAN_LINK"
+			return
+		fi
+
+#		config_get ip6addr $tunlink ipv6_address
+		ifname=`uci get dhcpv6.${tunlink}.ifname`
+		[ -z "$ifname" ] && {
+			echo "$cfg: NO_WAN_LINK"
+			return
+		}
+	}
+
+	ip -f inet6 tunnel add $link mode ipip6 remote $peeraddr local $ip6addr dev $ifname encaplimit none
+	ifconfig $link up 
+	route add default dev $link
+}
+
+proto_dslite_teardown() {
+	local cfg="$1"
+	local tunlink="$2"
+	local link="dslite-$cfg"
+
+	route del default dev $link
+	ifconfig $link down
+	ip -f inet6 tunnel del $link mode ipip6 
+}
+
+start() {
+	local ifaces tunlink
+
+	config_load dslite
+	config_get ifaces general ifaces
+	for iface in $ifaces; do
+		config_get tunlink $iface tunlink
+		proto_dslite_setup $iface $tunlink
+	done
+}
+
+stop() {
+	local ifaces tunlink
+
+	config_load dslite
+	config_get ifaces general ifaces
+	for iface in $ifaces; do
+		config_get tunlink $iface tunlink
+		proto_dslite_teardown $iface $tunlink
+	done
+}

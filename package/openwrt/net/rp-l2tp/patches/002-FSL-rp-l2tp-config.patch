@@ -1,0 +1,237 @@
+--- rp-l2tp-0.4-old/network.c	2003-06-11 07:47:17.000000000 +0530
++++ rp-l2tp-0.4/network.c	2013-05-31 11:51:42.000000000 +0530
+@@ -27,10 +27,19 @@
+ #include <string.h>
+ #include <signal.h>
+ #include <stdio.h>
++#define	MSPD_L2TP_OFFLOAD 1 
++#ifdef MSPD_L2TP_OFFLOAD
++#include <dirent.h>
++#include <glob.h>
++#include <libcmm.h>
++#include <cmmd.h>
++#endif
+ 
+ /* Our socket */
+ int Sock = -1;
++static struct sockaddr_in me;
+ 
++extern hash_table tunnels_by_my_id;
+ static EventHandler *NetworkReadHandler = NULL;
+ static void network_readable(EventSelector *es,
+ 			     int fd,
+@@ -50,6 +59,149 @@
+     }
+     exit(1);
+ }
++#ifdef MSPD_L2TP_OFFLOAD
++#define PPP_GLOB "/var/run/ppp*"
++#define DELIMS "/."
++int mspd_cmm_notify(l2tp_session *ses, char *itf_name)
++{
++	cmm_command_t cmd;
++/*	cmm_response_t res; */
++	u_int16_t res[10];
++	cmm_handle_t *handle;
++	cmmd_l2tp_session_t *l2tp_cmd;
++	char addr1_str[16], addr2_str[16]; 
++	int rcv_len;
++	int rc = 0;
++/*	unsigned short options = 0;*/
++/* Looks like the length bit is being set based on incoming dgram !*/
++#if 0  
++//	if (call->lbit)
++//		options |= CMMD_L2TP_OPT_LENGTH;
++
++#endif
++		
++	memset(&cmd, 0 , sizeof(cmd));
++	memset(&res, 0 , sizeof(res));
++
++	if (!(handle = cmm_open())) {
++		l2tp_set_errmsg( "Cannot open CMM handle");
++		return -1;
++	}
++
++	cmd.func = CMMD_CMD_L2TP_SESSION;
++	cmd.length = sizeof(cmmd_l2tp_session_t);
++	l2tp_cmd = (cmmd_l2tp_session_t*)&cmd.buf;
++	
++	strcpy(l2tp_cmd->itf_name, itf_name);
++	l2tp_cmd->family = me.sin_family;
++	l2tp_cmd->local_addr[0] = me.sin_addr.s_addr;
++	l2tp_cmd->peer_addr[0] = ses->tunnel->peer_addr.sin_addr.s_addr;
++	l2tp_cmd->local_port = me.sin_port;
++	l2tp_cmd->peer_port = ses->tunnel->peer_addr.sin_port;
++	l2tp_cmd->local_tun_id = htons(ses->tunnel->my_id);
++	l2tp_cmd->peer_tun_id = htons(ses->tunnel->assigned_id);
++	l2tp_cmd->local_ses_id = htons(ses->my_id);
++	l2tp_cmd->peer_ses_id = htons(ses->assigned_id);
++	l2tp_cmd->options = 0;
++
++	if (cmm_send(handle, &cmd, 0) != 0) {
++		l2tp_set_errmsg( "Error sending message to CMM, error = `%s'\n", strerror(errno));
++		rc = -1;
++		goto out;
++	}
++
++	if ((rcv_len = cmm_recv(handle, (cmm_response_t *)&res, 0)) < 0) {
++		l2tp_set_errmsg( "Error receiving message from CMM, error = `%s'\n", strerror(errno));
++		rc = -1;
++		goto out;
++	}
++	if (res[9] == FPP_ERR_OK) {
++		/*TODO add offload status to call and avoids resending info when new itf comes up */
++		strcpy(addr1_str, inet_ntoa(me.sin_addr));
++		strcpy(addr2_str, inet_ntoa(ses->tunnel->peer_addr.sin_addr));
++		l2tp_set_errmsg("Successfully offloaded tunnel\n");
++		l2tp_set_errmsg("Local IP %s\n",addr1_str );
++		l2tp_set_errmsg("Remote IP %s\n",addr2_str);
++		l2tp_set_errmsg( "Local tunnel(%d) session(%d)\n", ses->tunnel->my_id, ses->my_id);
++		l2tp_set_errmsg("Remote tunnel(%d) session(%d)\n", ses->tunnel->assigned_id, ses->assigned_id);
++	}
++	else {
++		l2tp_set_errmsg("Error from CMM, error = `%d'\n", res[9]);
++		rc = -1;
++	}
++out:
++	cmm_close(handle);
++	return rc;
++}
++
++/*
++ * This function checks if L2TP application
++ * is effectively the spawner of one of 
++ * the PPP interface
++ * 
++ */
++void mspd_ppp_up(int pid, char *itf_name)
++{
++	l2tp_session *ses;
++	l2tp_tunnel  *tun;
++	struct slave *sl;
++	void *cursor_tun;
++	void *cursor_ses;
++
++
++	for (tun = hash_start(&tunnels_by_my_id, &cursor_tun);
++			tun ;
++			tun = hash_next(&tunnels_by_my_id, &cursor_tun)) {
++
++		for (ses = hash_start(&tun->sessions_by_my_id, &cursor_ses);
++				ses ;
++				ses = hash_next(&tun->sessions_by_my_id, &cursor_ses)) {
++
++			sl = (struct slave *)ses->private;
++			if (((pid_t)sl->pid == (pid_t)pid) && (!ses->we_are_lac)) {
++				mspd_cmm_notify(ses, itf_name);
++				return;
++			}
++		}
++	}
++}
++/*TODO add synchronous signal handling */
++static void 
++mspd_sig_handler(int sig)
++{
++	glob_t globbuf;
++	int i;
++	char *token;
++	char addr1_str[16]; 
++
++		strcpy(addr1_str, inet_ntoa(me.sin_addr));
++		fprintf(stderr,"Local IP %s\n",addr1_str );
++
++	glob(PPP_GLOB, 0, NULL, &globbuf);
++
++	for (i = 0; i < globbuf.gl_pathc; i ++) {
++		FILE *fd;
++		char buf[10];
++		char buf_path[32];
++		int pid;
++
++		fd = fopen(globbuf.gl_pathv[i], "r");
++		if ((int)fd > 0) {
++			fgets(buf, 10, fd);
++			fclose(fd);
++			pid = atoi(buf);
++		
++			strcpy(buf_path, globbuf.gl_pathv[i]);
++			token = strtok(buf_path, DELIMS);
++			token = strtok(NULL, DELIMS);
++			token = strtok(NULL, DELIMS);
++			l2tp_set_errmsg ( "Found ppp interface (%s) with pppd PID %d\n", token, pid);
++			mspd_ppp_up(pid, token);
++		}
++	}
++}
++#endif
++
+ 
+ /**********************************************************************
+ * %FUNCTION: network_init
+@@ -64,13 +216,17 @@
+ int
+ l2tp_network_init(EventSelector *es)
+ {
+-    struct sockaddr_in me;
+     int flags;
+ 
+     gethostname(Hostname, sizeof(Hostname));
+     Hostname[sizeof(Hostname)-1] = 0;
+ 
+     Event_HandleSignal(es, SIGINT, sigint_handler);
++	fprintf(stderr,"SIGINT init");
++#ifdef MSPD_L2TP_OFFLOAD
++	fprintf(stderr,"SIGUSR2 init");
++	Event_HandleSignal(es,SIGUSR2, mspd_sig_handler); 
++#endif
+     if (Sock >= 0) {
+ 	if (NetworkReadHandler) {
+ 	    Event_DelHandler(es, NetworkReadHandler);
+--- rp-l2tp-0.4-old/tunnel.c	2004-07-01 20:28:56.000000000 +0530
++++ rp-l2tp-0.4/tunnel.c	2013-05-28 12:02:07.000000000 +0530
+@@ -23,7 +23,7 @@
+ #include <string.h>
+ 
+ /* Hash tables of all tunnels */
+-static hash_table tunnels_by_my_id;
++hash_table tunnels_by_my_id;
+ static hash_table tunnels_by_peer_address;
+ 
+ static uint16_t tunnel_make_tid(void);
+--- rp-l2tp-0.4-old/handlers/sync-pppd.c	2004-07-01 20:28:56.000000000 +0530
++++ rp-l2tp-0.4/handlers/sync-pppd.c	2013-05-31 11:28:19.000000000 +0530
+@@ -53,14 +53,6 @@
+     handle_frame
+ };
+ 
+-/* The slave process */
+-struct slave {
+-    EventSelector *es;		/* Event selector */
+-    l2tp_session *ses;		/* L2TP session we're hooked to */
+-    pid_t pid;			/* PID of child PPPD process */
+-    int fd;			/* File descriptor for event-handler loop */
+-    EventHandler *event;	/* Event handler */
+-};
+ 
+ static int handle_lac_opts(EventSelector *es, l2tp_opt_descriptor *desc, char const *value);
+ static int handle_lns_opts(EventSelector *es, l2tp_opt_descriptor *desc, char const *value);
+--- rp-l2tp-0.4-old/l2tp.h	2004-07-01 20:28:55.000000000 +0530
++++ rp-l2tp-0.4/l2tp.h	2013-05-31 11:28:30.000000000 +0530
+@@ -194,6 +194,15 @@
+     struct in_addr listen_addr;	/* IP to bind to */
+ } l2tp_settings;
+ 
++/* The slave process */
++struct slave {
++    EventSelector *es;		/* Event selector */
++    l2tp_session *ses;		/* L2TP session we're hooked to */
++    pid_t pid;			/* PID of child PPPD process */
++    int fd;			/* File descriptor for event-handler loop */
++    EventHandler *event;	/* Event handler */
++};
++
+ extern l2tp_settings Settings;
+ 
+ /* Bit definitions */

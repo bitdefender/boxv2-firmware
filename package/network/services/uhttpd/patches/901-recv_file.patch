@@ -1,0 +1,119 @@
+Index: uhttpd-2015-08-17/lua.c
+===================================================================
+--- uhttpd-2015-08-17.orig/lua.c
++++ uhttpd-2015-08-17/lua.c
+@@ -35,6 +35,104 @@ static struct config *_conf;
+ 
+ static lua_State *_L;
+ 
++static int are_events_ready(const int fd, const short int events, const int timeout)
++{
++	struct pollfd pfd = {
++		.fd = fd,
++		.events = events,
++	};
++
++	while (1) {
++		pfd.revents = 0;
++		int rc = poll(&pfd, 1, timeout);
++		if (rc == 1) {
++			if (pfd.revents & events)
++				return 1;
++			else
++				break;
++		} else if (rc == 0) {
++			break;
++		} else {
++			if (errno == EINTR)
++				continue;
++			else
++				break;
++		}
++	}
++
++	return 0;
++}
++
++static int read_sync_with_timeout(const int fd, void *buf, const size_t count, const int timeout)
++{
++	size_t total_bytes_read = 0;
++
++	do {
++		if (!are_events_ready(fd, POLLIN, timeout))
++			return -1;
++
++		ssize_t bytes_read = read(fd, buf + total_bytes_read, count - total_bytes_read);
++		if (bytes_read == -1)
++			return -1;
++
++		total_bytes_read += bytes_read;
++	} while (total_bytes_read != count);
++
++	return 0;
++}
++
++static int write_sync(const int fd, const void *buf, const size_t count)
++{
++	size_t total_bytes_written = 0;
++
++	do {
++		ssize_t bytes_written = write(fd, buf + total_bytes_written, count - total_bytes_written);
++		if (bytes_written == -1)
++			return -1;
++
++		total_bytes_written += bytes_written;
++	} while (total_bytes_written != count);
++
++	return 0;
++}
++
++static int uh_lua_recv_file(lua_State *L)
++{
++	int err = -1;
++
++	const char *file_name = luaL_checkstring(L, 1);
++	if (!file_name)
++		goto exit;
++
++	int fd = open(file_name, O_CREAT | O_TRUNC | O_WRONLY, 0600);
++	if (fd == -1)
++		goto exit;
++
++	int file_size = luaL_checklong(L, 2);
++
++	while (file_size > 0) {
++		char buf[LUAL_BUFFERSIZE];
++		size_t bytes_to_read = file_size < LUAL_BUFFERSIZE ? file_size : LUAL_BUFFERSIZE;
++
++		if (read_sync_with_timeout(STDIN_FILENO, buf, bytes_to_read, 1000) < 0)
++			goto close_fd;
++		if (write_sync(fd, buf, bytes_to_read) < 0)
++			goto close_fd;
++
++		file_size -= bytes_to_read;
++	}
++
++	err = 0;
++
++close_fd:
++	close(fd);
++
++exit:
++	lua_pushnumber(L, err);
++
++	return 1;
++}
++
+ static int uh_lua_recv(lua_State *L)
+ {
+ 	static struct pollfd pfd = {
+@@ -159,6 +257,9 @@ static lua_State *uh_lua_state_init(void
+ 	lua_pushcfunction(L, uh_lua_recv);
+ 	lua_setfield(L, -2, "recv");
+ 
++	lua_pushcfunction(L, uh_lua_recv_file);
++	lua_setfield(L, -2, "recv_file");
++
+ 	lua_pushcfunction(L, uh_lua_urldecode);
+ 	lua_setfield(L, -2, "urldecode");
+ 

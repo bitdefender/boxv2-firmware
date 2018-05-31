@@ -1,0 +1,34 @@
+--- Gateway/MLD_Proxy.h.orig	2009-03-18 19:21:35.000000000 +0100
++++ Gateway/MLD_Proxy.h	2009-03-18 19:23:10.000000000 +0100
+@@ -67,6 +67,31 @@
+ #include "MLD_forward.h"
+ #include "MLD_membership.h"
+ 
++/*
++ * Fixups for glibc >=2.4.  The following defines have been renamed as of
++ * glibc 2.4:
++ *  ICMP6_MEMBERSHIP_QUERY     -> MLD_LISTENER_QUERY
++ *  ICMP6_MEMBERSHIP_REPORT    -> MLD_LISTENER_REPORT
++ *  ICMP6_MEMBERSHIP_REDUCTION -> MLD_LISTENER_REDUCTION
++ */
++
++#ifndef ICMP6_MEMBERSHIP_QUERY
++#ifdef  MLD_LISTENER_QUERY
++#define ICMP6_MEMBERSHIP_QUERY MLD_LISTENER_QUERY
++#endif
++#endif
++
++#ifndef ICMP6_MEMBERSHIP_REPORT
++#ifdef  MLD_LISTENER_REPORT
++#define ICMP6_MEMBERSHIP_REPORT MLD_LISTENER_REPORT
++#endif
++#endif
++
++#ifndef ICMP6_MEMBERSHIP_REDUCTION
++#ifdef  MLD_LISTENER_REDUCTION
++#define ICMP6_MEMBERSHIP_REDUCTION MLD_LISTENER_REDUCTION
++#endif
++#endif
+ 
+ /*   DEFINE   */
+ /** no log_file */

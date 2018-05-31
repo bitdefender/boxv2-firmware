@@ -1,0 +1,13 @@
+Index: u-boot-2013.01/common/env_embedded.c
+===================================================================
+--- u-boot-2013.01.orig/common/env_embedded.c
++++ u-boot-2013.01/common/env_embedded.c
+@@ -25,7 +25,7 @@
+ #define	__ASSEMBLY__			/* Dirty trick to get only #defines */
+ #endif
+ #define	__ASM_STUB_PROCESSOR_H__	/* don't include asm/processor. */
+-#include <config.h>
++#include "../include/config.h"
+ #undef	__ASSEMBLY__
+ #include <environment.h>
+ #include <linux/stringify.h>

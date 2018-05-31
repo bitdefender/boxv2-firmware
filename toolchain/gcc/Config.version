@@ -1,0 +1,54 @@
+config GCC_VERSION_4_6_LINARO
+	default y if (!TOOLCHAINOPTS && TARGET_octeon)
+	bool
+
+config GCC_VERSION_4_8_LINARO
+	default y if (!TOOLCHAINOPTS && !TARGET_octeon)
+	bool
+
+config GCC_VERSION_6_2_0
+	default n
+	bool
+
+config GCC_VERSION_6_2_LINARO
+	default n
+	bool
+
+config GCC_VERSION_6_3_LINARO
+	default n
+	bool
+
+config GCC_VERSION_7_3_LINARO
+	default n
+	bool
+
+config GCC_VERSION
+	string
+	default "4.6.3"         if GCC_VERSION_4_6_3
+	default "4.6-linaro"    if GCC_VERSION_4_6_LINARO
+	default "4.8-linaro"    if GCC_VERSION_4_8_LINARO
+	default "6.2-linaro"    if GCC_VERSION_6_2_LINARO
+	default "6.3-linaro"    if GCC_VERSION_6_3_LINARO
+	default "7.3-linaro"    if GCC_VERSION_7_3_LINARO
+	default "6.2.0"         if GCC_VERSION_6_2_0
+	default "4.6-linaro"
+
+config GCC_VERSION_NUM
+	int
+	default 463    if GCC_VERSION_4_6_3
+	default 463    if GCC_VERSION_4_6_LINARO
+	default 480    if GCC_VERSION_4_8_LINARO
+	default 620    if GCC_VERSION_6_2_LINARO
+	default 631    if GCC_VERSION_6_3_LINARO
+	default 731    if GCC_VERSION_7_3_LINARO
+	default 620    if GCC_VERSION_6_2_0
+	default 463
+
+config GCC_VERSION_4_6
+	bool
+	default y       if GCC_VERSION_4_6_LINARO
+
+config GCC_VERSION_4_8
+	bool
+	default y	if GCC_VERSION_4_8_LINARO
+

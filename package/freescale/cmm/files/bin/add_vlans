@@ -1,0 +1,6 @@
+#!/bin/sh
+
+for vlan in $(awk -F \| '/\./ {print $1}' /proc/net/vlan/config); do
+	echo registering $vlan
+	cmm -c vlan add $vlan >/dev/null 2>&1
+done

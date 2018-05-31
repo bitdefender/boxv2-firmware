@@ -1,0 +1,14 @@
+#!/bin/sh /etc/rc.common
+# Copyright (C) 2006 OpenWrt.org
+
+start() {
+	echo "Warning: at next boot Asterisk Matisse won't be available. CSMEncaps mode"
+	/etc/init.d/matisse disable
+	/etc/init.d/csmencaps enable
+}
+
+stop(){
+	echo "Warning: at next boot CSMEncaps won't be available. Matisse mode"
+        /etc/init.d/matisse enable
+	/etc/init.d/csmencaps disable
+}

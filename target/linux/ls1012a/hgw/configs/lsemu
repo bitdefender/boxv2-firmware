@@ -1,0 +1,6 @@
+# CONFIG_C2K_EVM is not set
+# CONFIG_C2K_MFCN_EVM is not set
+# CONFIG_C2K_ASIC is not set
+# CONFIG_RTSM_C2K is not set
+CONFIG_LS_EMU=y
+# CONFIG_LS_RDB is not set

@@ -1,0 +1,89 @@
+--- vapi-2.18.0_old/LxProj/Makefile	2011-02-17 16:25:21.000000000 +0530
++++ vapi-2.18.0/LxProj/Makefile	2011-12-14 14:43:53.000000000 +0530
+@@ -48,7 +48,7 @@ VAPI_INC_DIR = 		-I$(VAPI_DIR)/common/va
+ 					-I$(VAPI_DIR)/common/gtl
+ 
+ DEBUG_OPT= -g -UMEMDBG -DVAPI_NODBG
+-CFLAGS := -c -Wall -O2 -Wstrict-prototypes -Wdeclaration-after-statement $(DEBUG_OPT) -D_LINUX_ $(ARMFLAGS)
++CFLAGS := -c -fPIC -Wall -O2 -Wstrict-prototypes -Wdeclaration-after-statement $(DEBUG_OPT) -D_LINUX_ $(ARMFLAGS)
+ 
+ ifeq ($(strip $(ENDIANNESS)),BIGENDIAN)
+ CFLAGS+=-DVAPI_BIGENDIAN
+@@ -108,14 +108,14 @@ ifeq ($(strip $(GTL)),PCI)
+ LIB = -lvapi -lgtlcommon -lgtlpci -lpthread   
+ GTL_FLAG=-DNOETH -DNOPOS
+ vapi: mkdirs_vapi $(VAPI_OBJS) gtlpci build_option
+-	$(AR) r libvapi.a $(VAPI_OBJS)
++	$(CC) -shared -o libvapi.so $(VAPI_OBJS)
+ endif
+ 
+ ifeq ($(strip $(GTL)),CSME)
+ LIB = -lvapi -lgtlcommon -lgtlcsme -lpthread   
+ GTL_FLAG=-DNOPCI -DNOPOS
+ vapi: mkdirs_vapi $(VAPI_OBJS) gtlcsme build_option
+-	$(AR) r libvapi.a $(VAPI_OBJS)
++	$(CC) -shared -o libvapi.so $(VAPI_OBJS)
+ 
+ endif
+ 
+@@ -123,7 +123,7 @@ ifeq ($(strip $(GTL)),ALL)
+ LIB = -lvapi -lgtlcommon -lgtlcsme -lgtlpci -lpthread
+ GTL_FLAG=
+ vapi: mkdirs_vapi $(VAPI_OBJS) gtlcsme gtlpci build_option
+-	$(AR) r libvapi.a $(VAPI_OBJS)
++	$(CC) -shared -o libvapi.so $(VAPI_OBJS)
+ endif
+ 
+ 
+@@ -131,31 +131,31 @@ all: vapi
+ 
+ 
+ gtlcommon:$(GTL_COMMON_OBJS)
+-	$(AR) r libgtlcommon.a $(GTL_COMMON_OBJS)
++	$(CC) -shared -o libgtlcommon.so $(GTL_COMMON_OBJS)
+ 
+ 
+ gtlcsme: gtlcommon $(GTL_CSME_OBJS)
+-	$(AR) r libgtlcsme.a $(GTL_CSME_OBJS)
++	$(CC) -shared -o libgtlcsme.so $(GTL_CSME_OBJS)
+ 
+ 
+ gtlpci: gtlcommon $(GTL_PCI_OBJS)	
+-	$(AR) r libgtlpci.a $(GTL_PCI_OBJS)	
++	$(CC) -shared -o libgtlpci.so $(GTL_PCI_OBJS)	
+ 
+ -include default
+ default: mkdirs_vapi
+        
+ clean: rmdirs_vapi
+-	rm -f $(LIB_DIR)/libgtlpci.a
+-	rm -f $(LIB_DIR)/libgtlcsme.a
+-	rm -f $(LIB_DIR)/libvapi.a
+-	rm -f $(LIB_DIR)/libgtlcommon.a
++	rm -f $(LIB_DIR)/libgtlpci.so
++	rm -f $(LIB_DIR)/libgtlcsme.so
++	rm -f $(LIB_DIR)/libvapi.so
++	rm -f $(LIB_DIR)/libgtlcommon.so
+ 	rm -rf $(INSTALL_DIR)
+ 
+ distclean: rmdirs_vapi 
+-	rm -f $(LIB_DIR)/libgtlpci.a 
+-	rm -f $(LIB_DIR)/libgtlcsme.a
+-	rm -f $(LIB_DIR)/libvapi.a
+-	rm -f $(LIB_DIR)/libgtlcommon.a
++	rm -f $(LIB_DIR)/libgtlpci.so
++	rm -f $(LIB_DIR)/libgtlcsme.so
++	rm -f $(LIB_DIR)/libvapi.so
++	rm -f $(LIB_DIR)/libgtlcommon.so
+ 	rm -rf $(INSTALL_DIR)
+ 
+ mkdirs_vapi:
+@@ -186,7 +186,7 @@ install: vapi
+ 	$(INSTALL_PROG) $(VAPI_DIR)/common/comcerto_headers/*.h $(INSTALL_INCLUDES_DIR)
+ 	$(INSTALL_PROG) $(VAPI_DIR)/linux/gtl_csme/csmencaps/if_csmencaps.h $(INSTALL_INCLUDES_DIR)
+ 	$(INSTALL_PROG) $(VAPI_DIR)$(VAPI_OPTION_INCLUDE) $(INSTALL_INCLUDES_DIR)
+-	$(INSTALL_PROG) *.a $(INSTALL_LIB_DIR)
++	/usr/bin/install -m 0755 *.so $(INSTALL_LIB_DIR)
+ 
+ # Define build options usable to build the application linked with VAPI
+ build_option:

@@ -1,0 +1,12 @@
+diff -ur rp-pppoe-3.8-vanilla/src/configure rp-pppoe-3.8/src/configure
+--- rp-pppoe-3.8-vanilla/src/configure	2006-04-02 16:29:42.000000000 +0200
++++ rp-pppoe-3.8/src/configure	2013-03-19 16:15:47.838087796 +0100
+@@ -5693,7 +5693,7 @@
+ fi
+ 
+ if test "$GCC" = yes; then
+-	CFLAGS="$CFLAGS -Wall -Wstrict-prototypes -ansi"
++	CFLAGS="$CFLAGS -Wall -Wstrict-prototypes -D_GNU_SOURCE"
+ fi
+ 
+ if test "$PPPD" = "NOTFOUND"; then

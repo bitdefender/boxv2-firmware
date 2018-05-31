@@ -1,0 +1,64 @@
+# Header Generator Configuration File
+#
+#		Header Format
+#	|-----------------------|
+#	|	Magic Number	|
+#	|-----------------------|
+#	|	Timestamp	|
+#	|-----------------------|
+#	|	CRC		|
+#	|-----------------------|
+#	|	Key Length	|
+#	|-----------------------|
+#	|	Image Hash Type	|
+#	|-----------------------|
+#	|	Image Length	|
+#	|-----------------------|
+#	|	Hash Value	|
+#	|-----------------------|
+#	|	Public Key	|
+#	|-----------------------|
+#	|	IV		|
+#	|-----------------------|
+#
+#	 1. Magic Number : Fix string « MSPD - 0x4D535044 »
+#	 2. Timestamp: Image creation timestamp.
+#	 3. CRC: 32 Bit CRC on full header.	At the time of CRC calculation this field should be 0. 
+#	 4. Image Hash Type: Hash Type 0/Sha-256/Rsa-Sha-256. 
+#	 I. Zero --  Initialized with all zero [size 32 bytes].
+#	 II. SHA-256 -- SHA-256 hash on the image [size 32 bytes].
+#	 III. RSA-SHA-256 -- RSA encrypted sha-256 hash on the image [size key size].
+#	 IV. AES-RSA-SHA-256 -- AES Decryption and RSA encrypted sha-256 hash on the Image.
+#	 5. Key Length: Length of Public Key 0/1K,2K. Zero means no key.
+#	 6. Image Length: Length of Current Image (excluding header).
+#	 7. Hash value: Hash result 256/1K/2K bits.
+#	 8. Public key (optional): Public key used for firmware authentication (Size 1K/2K/4K)
+#	 9. AES IV value (optional).
+#
+#	Sample configurations
+#
+#	  To generate firmware image with NULL hash
+#		null:::uImage::
+#
+#	  To generate firmware image with SHA256
+#		mk_c2kimage.sh sha256 uImage
+#		sha256:::uImage::
+#
+#	  To generate firmware image with RSA signature and key inbuilt to the header
+#		rsa:private.pem:insertkey:uImage::
+#
+#	  To generate firmware image with RSA signature and no key inserted in the header
+#		rsa:private.pem:nokey:uImage::
+#
+#	  To generate firmware image with AES-128 encryption and RSA signature and key inbuilt to the header
+#		aes-rsa:private.pem:insertkey:uImage:128:
+#
+#	  To generate firmware image with AES-128 encryption and RSA signature and no key inserted in the header
+#		aes-rsa:private.pem:nokey:uImage:128:
+#
+#	  To generate firmware image with AES-256 encryption and RSA signature and key inbuilt to the header
+#		aes-rsa:private.pem:insertkey:uImage:256:
+#
+#	  To generate firmware image with AES-256 encryption and RSA signature and no key inserted in the header
+#		aes-rsa:private.pem:nokey:uImage:256:
+null:::uImage::

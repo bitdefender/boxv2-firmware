@@ -1,0 +1,296 @@
+diff -pub vapi-2.18.3_orig/VAPI/linux/gtl_csme/csmencaps/af_csmencaps.c vapi-2.18.3/VAPI/linux/gtl_csme/csmencaps/af_csmencaps.c
+--- vapi-2.18.3_orig/VAPI/linux/gtl_csme/csmencaps/af_csmencaps.c	2011-05-31 11:03:22.000000000 +0300
++++ vapi-2.18.3/VAPI/linux/gtl_csme/csmencaps/af_csmencaps.c	2012-01-06 17:57:30.000000000 +0200
+@@ -251,6 +251,132 @@ struct csme_sock {
+ 
+ static struct proc_dir_entry *csme_proc_dir;
+ 
++struct skpair_list {
++	struct list_head klist;
++	struct sock *sk;
++	long long spec;
++};
++
++struct skpair_list skpair = {
++	.klist = LIST_HEAD_INIT(skpair.klist)
++};
++
++long long get_spec_by_sk(struct list_head *head, struct sock *sk)
++{
++	struct list_head *pos;
++	struct skpair_list *tmp;
++
++	list_for_each(pos, head) {
++		tmp = list_entry(pos, struct skpair_list, klist);
++
++		if (tmp->sk == sk) {
++			/* printk(KERN_INFO "csme: found spec = %lld belong to sk = %p, \n", tmp->spec, sk); */
++
++			return tmp->spec;
++		}
++	}
++
++	return -1;
++}
++
++int set_spec_by_sk(struct list_head *head, struct sock *sk, long long spec)
++{
++	struct list_head *pos;
++	struct skpair_list *skp;
++
++	list_for_each(pos, head) {
++		skp = list_entry(pos, struct skpair_list, klist);
++
++		if (skp->sk == sk) {
++			/* printk(KERN_INFO "csme: add spec = %lld to existing socket sk = %p\n", spec, sk); */
++
++			skp->spec = spec;
++
++			return 0;
++		}
++	}
++
++	skp = (struct skpair_list *)kmalloc(sizeof(struct skpair_list), GFP_KERNEL);
++
++	if (skp) {
++		/* printk(KERN_INFO "csme: add socket pair: sk = %p, spec = %lld\n", sk, spec); */
++
++		skp->sk = sk;
++		skp->spec = spec;
++		list_add(&(skp->klist), &(skpair.klist));
++
++		return 0;
++	}
++
++	printk(KERN_ERR "csme: no memory for new socket pair\n");
++
++	return -1;
++}
++
++int del_pair_by_sk(struct list_head *head, struct sock *sk)
++{
++	struct list_head *pos, *q;
++	struct skpair_list *tmp;
++
++	list_for_each_safe(pos, q, head) {
++		tmp = list_entry(pos, struct skpair_list, klist);
++
++		if (tmp->sk == sk) {
++			list_del(pos);
++			kfree(tmp);
++
++			/* printk(KERN_INFO "csme: free socket pair: sk = %p, spec = %lld\n", tmp->sk, tmp->spec); */
++
++			return 0;
++		}
++	}
++
++	printk(KERN_INFO "csme: spec not found: sk = %p\n", sk);
++
++	return -1;
++}
++
++
++/**
++ * csme_get_socket -
++ *
++ *
++ */
++static inline struct sock *csme_get_socket(struct sock *sk, struct sk_buff *skb)
++{
++	struct hlist_node *node;
++	struct sock *csk = NULL;
++
++	if (!skb) {
++		return NULL;
++	}
++
++	/* go through the list of sockets and retrieve the one that matches */
++
++	read_lock(&csme_sklist_lock);
++
++	sk_for_each(csk, node, &csme_sklist) {
++		if (csk == sk) {
++			sock_hold(csk);
++
++			if (!sock_flag(sk, SOCK_DEAD))
++				csk->sk_data_ready(csk, skb->len);
++
++			sock_put(csk);
++
++			read_unlock(&csme_sklist_lock);
++
++			return csk;
++		}
++	}
++
++	read_unlock(&csme_sklist_lock);
++
++	printk(KERN_ERR "csme: socket does not exist in list\n");
++
++	return NULL;
++}
++
+ /**
+  * dump_csme_hdr -
+  *
+@@ -610,7 +736,6 @@ static struct csme_target *target_add(un
+ 
+ 	memcpy(target->macaddr, scsme_devmac, ETH_ALEN);
+ 	target->scsme_ifindex = scsme_ifindex;
+-	target->scsme_user = scsme_user;
+ 
+ 	target_create_proc(target);
+ 
+@@ -963,6 +1088,8 @@ static void csme_tx_msg_next(struct csme
+ 			goto out;
+ 		}
+ 
++		channel->sk = skb->sk;
++
+ 		skb_set_owner_w(nskb, skb->sk);
+ 
+ 		csme_tx_msg_finish(target, nskb, NULL);
+@@ -1039,6 +1166,7 @@ static void handle_channel_timeout(unsig
+ 		goto out;
+ 	}
+ 
++	channel->sk = skb->sk;
+ 	skb_set_owner_w(nskb, skb->sk);
+ 
+ 	/* now retransmit the packet */
+@@ -1205,7 +1333,6 @@ static int csme_rx(struct sk_buff *skb)
+ 		}
+ 
+ 		channel = &target->boot_channel;		
+-
+ 	} else {
+ 		if (csme_hdr->channel_nb ==  __constant_htons(SUPVSR_CH)) {
+ 			channel = &target->supvsr_channel;
+@@ -1216,6 +1343,11 @@ static int csme_rx(struct sk_buff *skb)
+ 				goto drop;
+ 			}
+ 		}
++
++		if ( !(skb->sk = csme_get_socket(channel->sk, skb)) ) {
++			printk(KERN_INFO "csme_rx: socket is dead, no receiver, drop\n");
++			goto drop;
++		}
+ 	}
+ 
+ 	if (csme_hdr->cr) {
+@@ -1473,6 +1605,8 @@ static int csme_tx(struct sk_buff *skb, 
+ 	if (!nskb)
+ 		return -ENOMEM;
+ 
++	channel->sk = skb->sk;
++
+ 	return csme_tx_msg_finish(target, nskb, dev);
+ 
+ err_free:
+@@ -1485,24 +1619,6 @@ err_unlock:
+ }
+ 
+ /**
+- * csme_get_socket -
+- *
+- *
+- */
+-static inline struct sock *csme_get_socket(struct sk_buff *skb)
+-{
+-	struct sock *sk;
+-
+-	/* go through the list of sockets and retrieve the one that matches */
+-	/* for now a single socket is supported */
+-	read_lock(&csme_sklist_lock);
+-	sk = sk_head(&csme_sklist);
+-	read_unlock(&csme_sklist_lock);
+-
+-	return sk;
+-}
+-
+-/**
+  * check_ready_received -
+  * This function check if a received broadcast frame could be a READY boot indication
+  * sent by a comcerto. If yes it adds a new target structure in the target list. 
+@@ -1527,7 +1643,7 @@ static int check_ready_received(struct s
+ 		goto out;
+ 
+ 	/* if no socket opened do not reply to the READY*/
+-	if (!(csme_get_socket(skb)))
++	if (hlist_empty(&csme_sklist))
+ 		goto out;
+ 
+ 	/* check if this target exists for this particular device*/
+@@ -1594,8 +1710,8 @@ static int csmencaps_rcv(struct sk_buff 
+ 	if (csme_rx(skb))
+ 		goto drop;
+ 
+-	if (!(sk = csme_get_socket(skb))) {
+-		printk(KERN_DEBUG "csme: no open socket, dropping skb\n");
++	if ( !(sk = skb->sk) ) {
++		printk(KERN_INFO "csme: no open socket, dropping skb\n");
+ 
+ 		goto drop;
+ 	}
+@@ -1651,7 +1767,11 @@ static void generate_sockaddr(struct sk_
+ 	sa->scsme_ifindex = skb->dev->ifindex;
+ 
+ 	target = target_find(sa->scsme_devmac);
+-	sa->scsme_user = target->scsme_user;
++	sa->scsme_user = get_spec_by_sk(&skpair.klist, skb->sk);
++
++	if (!sa->scsme_user) {
++		printk(KERN_ERR "csme: generate_sockaddr: error: no spec found: sk = %p\n", skb->sk);
++	}
+ }
+ 
+ /*
+@@ -1840,6 +1960,7 @@ static int csmencaps_release(struct sock
+ 
+ 	write_lock_bh(&csme_sklist_lock);
+ 	sk_del_node_init(sk);
++	del_pair_by_sk(&skpair.klist, sk);
+ 	write_unlock_bh(&csme_sklist_lock);
+ 
+ 	/*
+@@ -1948,7 +2069,10 @@ static int csmencaps_setsockopt(struct s
+ 		target = target_find(usersetopt.scsme_devmac);
+ 
+ 		if (target) {
+-			target->scsme_user = usersetopt.csme_user;
++			if (set_spec_by_sk(&skpair.klist, sock->sk, usersetopt.csme_user)) {
++				printk(KERN_ERR "csme: CSME_USER_SET: could not assign spec with socket\n");
++				/* TODO: do something */
++			}
+ 		}
+ 
+ 		break;
+@@ -2095,15 +2219,6 @@ static int csmencaps_create(struct socke
+ 		return -ESOCKTNOSUPPORT;
+ 	}
+ 
+-	read_lock(&csme_sklist_lock);
+-	sk = sk_head(&csme_sklist);
+-	read_unlock(&csme_sklist_lock);
+-
+-	if (sk) {
+-		printk (KERN_ERR "csme: socket already created\n");
+-		return -ESOCKTNOSUPPORT;
+-	}
+-
+ 	sock->state = SS_UNCONNECTED;
+ 	err = -ENOBUFS;
+ #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,0)
+diff -pub vapi-2.18.3_orig/VAPI/linux/gtl_csme/csmencaps/csmencaps.h vapi-2.18.3/VAPI/linux/gtl_csme/csmencaps/csmencaps.h
+--- vapi-2.18.3_orig/VAPI/linux/gtl_csme/csmencaps/csmencaps.h	2010-01-14 12:46:28.000000000 +0200
++++ vapi-2.18.3/VAPI/linux/gtl_csme/csmencaps/csmencaps.h	2012-01-06 17:57:30.000000000 +0200
+@@ -99,6 +99,7 @@ struct csme_channel {
+ 	int retries;
+ 
+ 	u8 last_rx_seq_number[CSME_OPCODES_NUMBER];
++	struct sock *sk;
+ };
+ 
+ struct csme_stats {
+ 

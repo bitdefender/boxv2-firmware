@@ -1,0 +1,73 @@
+#!/bin/sh /etc/rc.common
+# Copyright (C) 2006 OpenWrt.org
+
+START=49
+
+start() {
+	# Mount VED interface
+	ifconfig eth1 up
+
+	# Load matisse modules 
+	insmod common
+	insmod csm csm_encaps_net_dev=eth1 csm_encaps_enabled=1
+	insmod ip_itf
+
+	#Remove POSTFORWARDING rule to avoid masquerading 
+#	iptables -t nat -F POSTROUTING	
+#	iptables -t nat -X postrouting_rule
+	iptables -t nat -I POSTROUTING 1 -p udp --dport 1111 -d 192.168.131.0/24 -j ACCEPT
+
+	/etc/init.d/tempo-t1 start
+
+	insmod gateway
+
+	#Create matisse nodes if not present
+	if [ ! -c /dev/csm0 ]
+		then mknod /dev/csm0 c 122 0
+	fi
+
+	if [ ! -c /dev/m821xx0 ]
+		then mknod /dev/m821xx0 c 246 0
+	fi
+
+	if [ ! -c /dev/m83xxx0 ]
+		then mknod /dev/m83xxx0 c 247 0
+	fi
+
+	if [ ! -c /dev/m829xx0 ]
+		then mknod /dev/m829xx0 c 245 0
+	fi
+	
+	if [ ! -c /dev/gateway ]
+		then mknod /dev/gateway c 120 0
+	fi
+
+	#Initialize csm
+	csm_app -v /dev/m821xx0
+	csm_app -c
+	csm_app -r
+	
+	#Initialize gateway driver
+	gateway_app -g
+	gateway_app -m
+	gateway_app -i
+
+	ifconfig eth3 192.168.131.1 up
+}
+
+stop(){
+
+	rmmod gateway
+
+	/etc/init.d/tempo-t1 stop
+
+	rmmod ip_itf
+	rmmod csm
+	rmmod common
+
+	# Umount Matisse virtual IP interface
+	ifconfig eth3 down	
+
+	# Unmount VED interface
+	ifconfig eth1 down
+}

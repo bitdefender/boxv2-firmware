@@ -1,0 +1,340 @@
+diff -Naur -x '*.o' -x '*.ko' -x '*.cmd' -x '*.a' -x '*.so' -x tags -x '*.orig' vapi-2.18.4_orig/VAPI/linux/gtl_csme/csmencaps/af_csmencaps.c vapi-2.18.4/VAPI/linux/gtl_csme/csmencaps/af_csmencaps.c
+--- vapi-2.18.4_orig/VAPI/linux/gtl_csme/csmencaps/af_csmencaps.c	2016-02-17 14:39:48.947947000 +0530
++++ vapi-2.18.4/VAPI/linux/gtl_csme/csmencaps/af_csmencaps.c	2016-02-17 14:46:07.385886000 +0530
+@@ -199,7 +199,11 @@
+ #define csme_proc_dir_remove()		remove_proc_entry("net/csmencaps", NULL);
+ #else
+ #define csme_proc_dir_create()		proc_net_mkdir(&init_net, "csmencaps", init_net.proc_net);
++#if LINUX_VERSION_CODE < KERNEL_VERSION(3,9,0)
+ #define csme_proc_dir_remove()		proc_net_remove(&init_net, "csmencaps");
++#else
++#define csme_proc_dir_remove()		remove_proc_entry("csmencaps", init_net.proc_net);
++#endif
+ #endif
+ 
+ #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,31)
+@@ -344,7 +348,9 @@
+  */
+ static inline struct sock *csme_get_socket(struct sock *sk, struct sk_buff *skb)
+ {
++#if LINUX_VERSION_CODE < KERNEL_VERSION(3,9,0)
+ 	struct hlist_node *node;
++#endif
+ 	struct sock *csk = NULL;
+ 
+ 	if (!skb) {
+@@ -355,12 +361,21 @@
+ 
+ 	read_lock(&csme_sklist_lock);
+ 
+-	sk_for_each(csk, node, &csme_sklist) {
++#if LINUX_VERSION_CODE < KERNEL_VERSION(3,9,0)
++	sk_for_each(csk, node, &csme_sklist)
++#else
++	sk_for_each(csk, &csme_sklist)
++#endif
++	{
+ 		if (csk == sk) {
+ 			sock_hold(csk);
+ 
+ 			if (!sock_flag(sk, SOCK_DEAD))
++#if LINUX_VERSION_CODE < KERNEL_VERSION(3,9,0)
+ 				csk->sk_data_ready(csk, skb->len);
++#else
++				csk->sk_data_ready(csk);
++#endif
+ 
+ 			sock_put(csk);
+ 
+@@ -408,6 +423,7 @@
+ }
+ 
+ #ifdef CONFIG_PROC_FS
++#if LINUX_VERSION_CODE < KERNEL_VERSION(3,9,0)
+ static int csme_target_read_proc(char *buffer, char **start, off_t offset, int length, int *eof, void *data)
+ {
+ 	struct csme_target *target = (struct csme_target *) data;
+@@ -446,27 +462,13 @@
+ 	return len;
+ }
+ 
+-static void target_create_proc(struct csme_target *target)
+-{
+-	char s[20 + ETH_ALEN * 3];
+-
+-	snprintf(s, 20 + ETH_ALEN * 3, "%02X:%02X:%02X:%02X:%02X:%02X",
+-		target->macaddr[0], target->macaddr[1], target->macaddr[2],
+-		target->macaddr[3], target->macaddr[4], target->macaddr[5]);
+-
+-	if (!create_proc_read_entry(s, 0, csme_proc_dir, csme_target_read_proc, target))
+-		printk (KERN_ERR "csme: failed to create %s proc entry\n", s);
+-}
+-
+-static void target_remove_proc(struct csme_target *target)
++static int csme_version_read_proc(char *buffer, char **start, off_t offset, int length, int *eof, void *data)
+ {
+-	char s[20 + ETH_ALEN * 3];
++	int len = 0;
+ 
+-	snprintf(s, 20 + ETH_ALEN * 3, "%02X:%02X:%02X:%02X:%02X:%02X",
+-		target->macaddr[0], target->macaddr[1], target->macaddr[2],
+-		target->macaddr[3], target->macaddr[4], target->macaddr[5]);
++	len += sprintf(buffer, "%d.%d.%d\n", CSME_VERSION_MAJOR, CSME_VERSION_MINOR, CSME_VERSION_MICRO);
+ 
+-	remove_proc_entry(s, csme_proc_dir);
++	return len;
+ }
+ 
+ static int csme_socket_read_proc(char *buffer, char **start, off_t offset, int length, int *eof, void *data)
+@@ -482,7 +484,8 @@
+ 
+ 	read_lock(&csme_sklist_lock);
+ 
+-	sk_for_each(sk, node, &csme_sklist) {
++	sk_for_each(sk, node, &csme_sklist)
++	{
+ 		po = csme_sk(sk);
+ 
+ 		len += sprintf(buffer + len, "%p %-6d %-4d   %-6u %-6u %-6lu",
+@@ -516,15 +519,123 @@
+ 	return len;
+ }
+ 
+-static int csme_version_read_proc(char *buffer, char **start, off_t offset, int length, int *eof, void *data)
++#else
++static int csme_target_proc_show(struct seq_file *m, void *v)
+ {
+-	int len = 0;
++	struct csme_target *target = (struct csme_target *) m->private;
+ 
+-	len += sprintf(buffer, "%d.%d.%d\n", CSME_VERSION_MAJOR, CSME_VERSION_MINOR, CSME_VERSION_MICRO);
++	seq_printf(m, "tx_msg:                      %d\n", atomic_read(&target->stats.tx_msg));
++	seq_printf(m, "tx_msg_total_retransmitted:  %d\n", atomic_read(&target->stats.tx_msg_total_retransmitted));
++	seq_printf(m, "tx_msg_max_restransmissions: %d\n", atomic_read(&target->stats.tx_msg_max_retransmissions));
++	seq_printf(m, "tx_msg_retransmitted:        %d\n", atomic_read(&target->stats.tx_msg_retransmitted));
++	seq_printf(m, "tx_msg_err:                  %d\n", atomic_read(&target->stats.tx_msg_err));
++
++	seq_printf(m, "rx_ack:                      %d\n", atomic_read(&target->stats.rx_ack));
++	seq_printf(m, "rx_ack_wrongseq:             %d\n", atomic_read(&target->stats.rx_ack_wrongseq));
++	seq_printf(m, "rx_ack_err:                  %d\n", atomic_read(&target->stats.rx_ack_err));
++	
++	seq_printf(m, "rx_msg:                      %d\n", atomic_read(&target->stats.rx_msg));
++	seq_printf(m, "rx_msg_repeated:             %d\n", atomic_read(&target->stats.rx_msg_repeated));
++	seq_printf(m, "rx_msg_err:                  %d\n", atomic_read(&target->stats.rx_msg_err));
+ 
+-	return len;
++	seq_printf(m, "tx_ack:                      %d\n", atomic_read(&target->stats.tx_ack));
++	seq_printf(m, "tx_ack_err:                  %d\n", atomic_read(&target->stats.tx_ack_err));
++
++	return 0;
+ }
+ 
++static int csme_version_proc_show(struct seq_file *m, void *v)
++{
++	seq_printf(m, "%d.%d.%d\n", CSME_VERSION_MAJOR, CSME_VERSION_MINOR, CSME_VERSION_MICRO);
++
++	return 0;
++}
++
++static int csme_socket_proc_show(struct seq_file *m, void *v)
++{
++	struct sock *sk;
++
++	seq_printf(m, "sk       RefCnt Type  Rmem   User   Inode\n");
++
++	read_lock(&csme_sklist_lock);
++
++	sk_for_each(sk, &csme_sklist)
++	{
++		seq_printf(m, "%p %-6d %-4d   %-6u %-6u %-6lu\n",
++				sk,
++				atomic_read(&sk->sk_refcnt),
++				sk->sk_type,
++				atomic_read(&sk->sk_rmem_alloc), sock_i_uid(sk), sock_i_ino(sk));
++
++	}
++
++	read_unlock(&csme_sklist_lock);
++	return 0;
++}
++
++static int csme_target_proc_open(struct inode *inode, struct file *file)
++{
++	return single_open(file, csme_target_proc_show, PDE_DATA(inode));
++}
++static int csme_version_proc_open(struct inode *inode, struct file *file)
++{
++	return single_open(file, csme_version_proc_show, PDE_DATA(inode));
++}
++static int csme_socket_proc_open(struct inode *inode, struct file *file)
++{
++	return single_open(file, csme_socket_proc_show, PDE_DATA(inode));
++}
++
++
++static const struct file_operations csme_target_proc_fops = {
++	.open           = csme_target_proc_open,
++	.read           = seq_read,
++	.llseek         = seq_lseek,
++	.release        = single_release,
++};
++static const struct file_operations csme_version_proc_fops = {
++	.open           = csme_version_proc_open,
++	.read           = seq_read,
++	.llseek         = seq_lseek,
++	.release        = single_release,
++};
++static const struct file_operations csme_socket_proc_fops = {
++	.open           = csme_socket_proc_open,
++	.read           = seq_read,
++	.llseek         = seq_lseek,
++	.release        = single_release,
++};
++#endif
++      
++
++static void target_create_proc(struct csme_target *target)
++{
++	char s[20 + ETH_ALEN * 3];
++
++	snprintf(s, 20 + ETH_ALEN * 3, "%02X:%02X:%02X:%02X:%02X:%02X",
++		target->macaddr[0], target->macaddr[1], target->macaddr[2],
++		target->macaddr[3], target->macaddr[4], target->macaddr[5]);
++
++#if LINUX_VERSION_CODE < KERNEL_VERSION(3,9,0)
++	if (!create_proc_read_entry(s, 0, csme_proc_dir, csme_target_read_proc, target))
++#else
++	if (!proc_create_data(s, 0, csme_proc_dir, &csme_target_proc_fops, target))
++#endif
++		printk (KERN_ERR "csme: failed to create %s proc entry\n", s);
++}
++
++static void target_remove_proc(struct csme_target *target)
++{
++	char s[20 + ETH_ALEN * 3];
++
++	snprintf(s, 20 + ETH_ALEN * 3, "%02X:%02X:%02X:%02X:%02X:%02X",
++		target->macaddr[0], target->macaddr[1], target->macaddr[2],
++		target->macaddr[3], target->macaddr[4], target->macaddr[5]);
++
++	remove_proc_entry(s, csme_proc_dir);
++}
++
++
+ 
+ static int csme_create_proc(void)
+ {
+@@ -537,12 +648,22 @@
+ 		goto err0;
+ 	}
+ 
+-	if (!create_proc_read_entry("version", 0, csme_proc_dir, csme_version_read_proc, NULL)) {
++#if LINUX_VERSION_CODE < KERNEL_VERSION(3,9,0)
++	if (!create_proc_read_entry("version", 0, csme_proc_dir, csme_version_read_proc, NULL))
++#else
++	if (!proc_create("version", 0, csme_proc_dir, &csme_version_proc_fops))
++#endif
++	{
+ 		printk (KERN_ERR "csme: failed to create net/csmencaps/version proc entry\n");
+ 		goto err1;
+ 	}	
+ 
+-	if (!create_proc_read_entry("sockets", 0, csme_proc_dir, csme_socket_read_proc, NULL)) {
++#if LINUX_VERSION_CODE < KERNEL_VERSION(3,9,0)
++	if (!create_proc_read_entry("sockets", 0, csme_proc_dir, csme_socket_read_proc, NULL))
++#else
++	if (!proc_create("sockets", 0, csme_proc_dir, &csme_socket_proc_fops))
++#endif
++	{
+ 		printk (KERN_ERR "csme: failed to create net/csmencaps/sockets proc entry\n");
+ 		goto err2;
+ 	}
+@@ -1669,6 +1790,13 @@
+ 	return -1;
+ }
+ 
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,12,0)
++void csmencaps_sock_destructor(struct sk_buff *skb)
++{
++	/* DO nothing */
++}
++EXPORT_SYMBOL(csmencaps_sock_destructor);
++#endif
+ 
+ /**
+  * csmencaps_rcv -
+@@ -1722,6 +1850,14 @@
+ 		goto drop;
+ 	}
+ 
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,12,0)
++	/* 
++	* From kernel 3.12 version skb_orphan() function checking skb->destructor, if it does not present
++	* it is calling BUG_ON function, so it is getting panic. skb_set_owner_r() function calling the 
++	* skb_orphan() function.
++	*/
++	skb->destructor = csmencaps_sock_destructor;
++#endif
+ 	skb_set_owner_r(skb, sk);
+ 
+ 	skb_dst_drop(skb);
+@@ -1737,7 +1873,11 @@
+ 	__skb_queue_tail(&sk->sk_receive_queue, skb);
+ 	spin_unlock(&sk->sk_receive_queue.lock);
+ 
++#if LINUX_VERSION_CODE < KERNEL_VERSION(3,9,0)
+ 	sk->sk_data_ready(sk, skb_len);
++#else
++	sk->sk_data_ready(sk);
++#endif
+ 
+ 	return 0;
+ 
+@@ -1842,9 +1982,17 @@
+ 
+ 	multicmds = csme_ntoh(skb);
+ 
++#if LINUX_VERSION_CODE < KERNEL_VERSION(3,19,0)
+ 	err = memcpy_toiovec(msg->msg_iov, skb->data, skb->len);
++#else
++	err = memcpy_to_msg(msg, skb->data, skb->len);
++#endif
+ 	if (err) {
++#if LINUX_VERSION_CODE < KERNEL_VERSION(3,19,0)
+ 		printk(KERN_ERR "csme: memcpy_toiovec() failed, error(%d)\n", err);
++#else
++		printk(KERN_ERR "csme: memcpy_to_msg() failed, error(%d)\n", err);
++#endif
+ 		goto err1;
+ 	}
+ 
+@@ -1922,9 +2070,17 @@
+ 	skb_reserve(skb, CSME_HDR_LEN + dev->hard_header_len);
+ 
+ 	/* copy message from userspace to skb */
++#if LINUX_VERSION_CODE < KERNEL_VERSION(3,19,0)
+ 	err = memcpy_fromiovec(skb_put(skb, len), msg->msg_iov, len);
++#else
++	err = memcpy_from_msg(skb_put(skb, len), msg, len);
++#endif
+ 	if (err < 0) {
++#if LINUX_VERSION_CODE < KERNEL_VERSION(3,19,0)
+ 		printk (KERN_ERR "csme: memcpy_fromiovec() failed, error(%d)\n", err);
++#else
++		printk (KERN_ERR "csme: memcpy_from_msg() failed, error(%d)\n", err);
++#endif
+ 		goto out_free;
+ 	}
+ 
+@@ -2196,7 +2352,11 @@
+  */
+ 
+ #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,24)
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,33)
++static int csmencaps_create(struct net *net, struct socket *sock, int protocol, int kern)
++#else
+ static int csmencaps_create(struct net *net, struct socket *sock, int protocol)
++#endif
+ #else
+ static int csmencaps_create(struct socket *sock, int protocol)
+ #endif

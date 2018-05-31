@@ -1,0 +1,21 @@
+--- vapi_sanity/Makefile.orig	2010-03-12 16:47:55.000000000 +0200
++++ vapi_sanity/Makefile	2010-03-12 16:48:38.000000000 +0200
+@@ -11,7 +11,7 @@
+ LDFLAGS += -L $(FSROOT)/usr/local/lib $(LIB)
+ 
+ #check for VAPI build option
+-GTL_OPTION := $(shell grep VAPI_GTL $(FSROOT)/usr/local/include/vapi/vapi_build_option.h | cut -d" " -f2)
++GTL_OPTION := VAPI_GTL_CSME
+ 
+ #if VAPI was build for CSME
+ ifeq ($(GTL_OPTION), VAPI_GTL_CSME)
+@@ -35,6 +35,9 @@
+ TARGET	:= vapi_san
+ OBJS	:= vapi_san.o vapi_san_util.o readcfg.o
+ 
++CFLAGS += -I ${VAPI_TEST_STAG_DIR}/include -I ${VAPI_TEST_STAG_DIR}/usr/include
++LDFLAGS  += -L ${VAPI_TEST_STAG_DIR}/lib -L ${VAPI_TEST_STAG_DIR}/usr/lib 
++
+ all: $(TARGET)
+ 
+ clean:

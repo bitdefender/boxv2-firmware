@@ -1,0 +1,408 @@
+Index: linux-3.19.3/fs/binfmt_elf.c
+===================================================================
+--- linux-3.19.3.orig/fs/binfmt_elf.c
++++ linux-3.19.3/fs/binfmt_elf.c
+@@ -41,6 +41,8 @@
+ #include <asm/uaccess.h>
+ #include <asm/param.h>
+ #include <asm/page.h>
++#include <linux/mount.h>
++#include "ubifs/ubifs.h"
+ 
+ #ifndef user_long_t
+ #define user_long_t long
+@@ -49,6 +51,8 @@
+ #define user_siginfo_t siginfo_t
+ #endif
+ 
++#define ACCEPT_UNSIGNED 1
++
+ struct elf_sig_info {
+ 	u8      algo;		/* Public-key crypto algorithm [enum pkey_algo] */
+ 	u8	hash;		/* Digest algorithm [enum pkey_hash_algo] */
+@@ -546,6 +550,86 @@ static inline int arch_check_elf(struct
+ 
+ #endif /* !CONFIG_ARCH_BINFMT_ELF_STATE */
+ 
++// skip is returned only due to missing i_version or unsupported fstype, and
++// is not stored in 'cache' (i.e. in vfs_inode)
++
++enum sig_cache_result_t {
++	SIG_CACHE_MISS=0,
++	SIG_CACHE_INVALID,
++	SIG_CACHE_VALID,
++	SIG_CACHE_SKIP, 
++};
++
++static inline const char *file_name(struct file *filp)
++{
++	const char *name = "null";
++
++	if (filp->f_path.dentry && filp->f_path.dentry->d_name.name)
++		name = filp->f_path.dentry->d_name.name;
++	
++	return name;
++}
++
++static inline bool is_readonly(struct file *filp)
++{
++	return IS_RDONLY(file_inode(filp)) || __mnt_is_readonly(filp->f_path.mnt);
++}
++
++static bool can_cache_sig(struct file *filp)
++{
++	struct inode *inode = file_inode(filp);
++
++	if (strcmp(inode->i_sb->s_type->name, "ubifs") != 0) {
++		printk(KERN_INFO "cannot cache sig: name:%s fs:%s\n", 
++			file_name(filp), inode->i_sb->s_type->name);
++		return false;
++	}
++
++	if (!IS_I_VERSION(inode) && !is_readonly(filp)) {
++		printk(KERN_INFO "cannot cache sig: name:%s is_iv:0 ro:0\n", 
++			file_name(filp));
++		return false;
++	}
++	
++	return true;
++}
++
++static enum sig_cache_result_t sig_cache_lookup(struct file *filp)
++{
++	struct inode *inode = file_inode(filp);
++	struct ubifs_inode *ui;
++	
++	if (!can_cache_sig(filp))
++		return SIG_CACHE_SKIP;
++
++	ui = container_of(inode, struct ubifs_inode, vfs_inode);
++	
++	/*printk(KERN_ERR "sig get:%s iv:%llu cached_iv:%llu valid:%u\n", file_name(filp), 
++		inode->i_version, ui->sig_i_version, ui->sig_valid);*/
++
++	if (inode->i_version == ui->sig_i_version)
++		return ui->sig_valid ? SIG_CACHE_VALID : SIG_CACHE_INVALID;
++
++	return SIG_CACHE_MISS;
++}
++
++static void sig_cache_add(struct file *filp, unsigned sig_valid)
++{
++	struct inode *inode = file_inode(filp);
++	struct ubifs_inode *ui;
++
++	if (!can_cache_sig(filp))
++		return;
++
++	ui = container_of(inode, struct ubifs_inode, vfs_inode);
++	
++	ui->sig_i_version = inode->i_version;
++	ui->sig_valid = sig_valid;
++
++	printk(KERN_ERR "sig add:%s iv:%llu valid:%u\n", file_name(filp), 
++		inode->i_version, sig_valid);
++}
++
+ /* This is much more generalized than the library routine read function,
+    so we keep this separate.  Technically the library read function
+    is only provided so that we can read a.out libraries that have
+@@ -561,10 +645,17 @@ static unsigned long load_elf_interp(str
+ 	unsigned long last_bss = 0, elf_bss = 0;
+ 	unsigned long error = ~0UL;
+ 	unsigned long total_size;
++	enum sig_cache_result_t sig_cache_result;
+ 	struct elf_sig_data *esd = NULL;
+ 	bool first_signed_phdr = true;
+ 	int i;
+ 
++	sig_cache_result = sig_cache_lookup(interpreter);
++	if (sig_cache_result == SIG_CACHE_INVALID) {
++		send_sig(SIGKILL, current, 0);
++		return -EINVAL;
++	}
++
+ 	/* First of all, some simple consistency checks */
+ 	if (interp_elf_ex->e_type != ET_EXEC &&
+ 	    interp_elf_ex->e_type != ET_DYN)
+@@ -580,16 +671,29 @@ static unsigned long load_elf_interp(str
+ 		error = -EINVAL;
+ 		goto out;
+ 	}
++	
++	if (sig_cache_result == SIG_CACHE_MISS) {
++		bool invalid;
+ 
+-	esd = elf_parse_binary_signature(interp_elf_ex, interpreter);
+-	/*printk(KERN_ERR "interp parse_sig: esd:%p name:%s interp:%s\n", esd, filename,
+-			interpreter->f_path.dentry && interpreter->f_path.dentry->d_name.name ?
+-			interpreter->f_path.dentry->d_name.name : "null");*/
+-	if (IS_ERR(esd)) {
+-		error = PTR_ERR(esd);
+-		send_sig(SIGKILL, current, 0);
+-		esd = NULL;
+-		goto out;
++		esd = elf_parse_binary_signature(interp_elf_ex, interpreter);
++
++		#ifdef ACCEPT_UNSIGNED
++		if (!esd) sig_cache_add(interpreter, true);
++		invalid = IS_ERR(esd);
++		#else
++		invalid = !esd || IS_ERR(esd);
++		#endif
++		
++		if (invalid) {
++			sig_cache_add(interpreter, false);
++
++			if (esd) esd = NULL;
++
++			send_sig(SIGKILL, current, 0);
++
++			error = -EINVAL;
++			goto out;
++		}
+ 	}
+ 
+ 	eppnt = interp_elf_phdata;
+@@ -673,9 +777,10 @@ static unsigned long load_elf_interp(str
+ 	/* Finalize digest and do signature verification */
+ 	if (esd) {
+ 		error = elf_finalize_digest_verify_signature(esd);
+-        printk(KERN_ERR "interp verify: ret=%ld\n", error);
++		
++		sig_cache_add(interpreter, error==0);
+ 
+-		if (error < 0) {
++		if (error) {
+ 			send_sig(SIGKILL, current, 0);
+ 			goto out;
+ 		}
+@@ -1121,19 +1226,21 @@ int verify_elf(struct file *filp)
+ 	unsigned long load_addr = 0;
+ 	bool load_addr_set = false;
+ 	unsigned long total_size;
++	enum sig_cache_result_t sig_cache_result;
+ 	struct elf_sig_data *esd = NULL;
+ 	bool first_signed_phdr = true;
+ 	int error = -EINVAL;
+ 	int i, ret;
+ 
+-	/*
+-	const char *name = "null";
+-	if (filp->f_path.dentry && filp->f_path.dentry->d_name.name)
+-		name = filp->f_path.dentry->d_name.name;
++	sig_cache_result = sig_cache_lookup(filp);
++
++	if (sig_cache_result == SIG_CACHE_VALID || 
++	    sig_cache_result == SIG_CACHE_SKIP)
++		return 0;
++
++	if (sig_cache_result == SIG_CACHE_INVALID)
++		return -EINVAL;
+ 
+-	printk(KERN_ERR "verify_elf file:%s\n", name);
+-	*/
+-	
+ 	ret = kernel_read(filp, 0, (char *)&elf_ex, sizeof(elf_ex));
+ 	if (ret != sizeof(elf_ex))
+ 		goto out;
+@@ -1159,18 +1266,25 @@ int verify_elf(struct file *filp)
+ 		error = -EINVAL;
+ 		goto out;
+ 	}
+-
++	
+ 	esd = elf_parse_binary_signature(&elf_ex, filp);
+-	if (!esd) {
+-		error = -EINVAL;
+-		goto out;
+-	} else if (esd && IS_ERR(esd)) {
+-		send_sig(SIGKILL, current, 0);
++	
++	{
++		#ifdef ACCEPT_UNSIGNED
++		bool invalid = IS_ERR(esd);
++		if (!esd) sig_cache_add(filp, true);
++		#else
++		bool invalid = !esd || IS_ERR(esd);
++		#endif
+ 
+-		error = PTR_ERR(esd);
+-		esd = NULL;
++		if (invalid) {
++			sig_cache_add(filp, false);
+ 
+-		goto out;
++			if (esd) esd = NULL;
++			
++			error = -EINVAL;
++			goto out;
++		}
+ 	}
+ 
+ 	eppnt = elf_phdata;
+@@ -1247,12 +1361,14 @@ int verify_elf(struct file *filp)
+ 	if (esd) {
+ 		/* Finalize digest and do signature verification */
+ 		error = elf_finalize_digest_verify_signature(esd);
+-		printk(KERN_ERR "ioctl verify: ret=%d\n", error);
++		
++		sig_cache_add(filp, error==0);
+ 
+-		if (error)
+-			send_sig(SIGKILL, current, 0);
++		if (error) goto out;
+ 	}
+ 
++	error = 0;
++
+ out:
+ 	if (elf_phdata) kfree(elf_phdata);
+ 	free_elf_sig_data(esd);
+@@ -1262,17 +1378,12 @@ out:
+ 
+ int ioctl_verify(struct file *filp)
+ {
+-    /*
+-    This should be:
+-
+-        error = verify_elf(filp);
+-        if (BAD_ADDR(error))
+-            send_sig(SIGKILL);
++	int ret = verify_elf(filp);
+ 
+-    but we don't kill unsigned files yet.
+-    */
+-
+-    return verify_elf(filp);
++	if (ret < 0)
++		send_sig(SIGKILL, current, 0);
++	
++	return ret;
+ }
+ EXPORT_SYMBOL(ioctl_verify);
+ 
+@@ -1316,6 +1427,7 @@ static int load_elf_binary(struct linux_
+ 	unsigned long start_code, end_code, start_data, end_data;
+ 	unsigned long reloc_func_desc __maybe_unused = 0;
+ 	int executable_stack = EXSTACK_DEFAULT;
++	enum sig_cache_result_t sig_cache_result;
+ 	struct elf_sig_data *esd = NULL;
+ 	bool first_signed_phdr = true;
+ 	struct pt_regs *regs = current_pt_regs();
+@@ -1325,6 +1437,12 @@ static int load_elf_binary(struct linux_
+ 	} *loc;
+ 	struct arch_elf_state arch_state = INIT_ARCH_ELF_STATE;
+ 
++	sig_cache_result = sig_cache_lookup(bprm->file);
++	if (sig_cache_result == SIG_CACHE_INVALID) {
++		send_sig(SIGKILL, current, 0);
++		return -EINVAL;
++	}
++
+ 	loc = kmalloc(sizeof(*loc), GFP_KERNEL);
+ 	if (!loc) {
+ 		retval = -ENOMEM;
+@@ -1498,13 +1616,29 @@ static int load_elf_binary(struct linux_
+ 		goto out_free_dentry;
+ 	
+ 	current->mm->start_stack = bprm->p;
++	
++	if (sig_cache_result == SIG_CACHE_MISS) {
++		bool invalid;
+ 
+-	esd = elf_parse_binary_signature(&loc->elf_ex, bprm->file);
+-	if (IS_ERR(esd)) {
+-		retval = PTR_ERR(esd);
+-		send_sig(SIGKILL, current, 0);
+-		esd = NULL;
+-		goto out_free_dentry;
++		esd = elf_parse_binary_signature(&loc->elf_ex, bprm->file);
++
++		#ifdef ACCEPT_UNSIGNED
++		invalid = IS_ERR(esd);
++		if (!esd) sig_cache_add(bprm->file, true);
++		#else
++		invalid = !esd || IS_ERR(esd);
++		#endif
++
++		if (invalid) {
++			sig_cache_add(bprm->file, false);
++
++			if (esd) esd = NULL;
++
++			send_sig(SIGKILL, current, 0);
++
++			retval = -EINVAL;
++			goto out_free_dentry;
++		}
+ 	}
+ 
+ 	/* Now we do a little grungy work by mmapping the ELF image into
+@@ -1646,9 +1780,10 @@ static int load_elf_binary(struct linux_
+ 	/* Finalize digest and do signature verification */
+ 	if (esd) {
+ 		retval = elf_finalize_digest_verify_signature(esd);
+-        printk(KERN_ERR "verify: ret=%d\n", retval);
++		
++		sig_cache_add(bprm->file, retval==0);
+ 
+-		if (retval < 0) {
++		if (retval) {
+ 			send_sig(SIGKILL, current, 0);
+ 			goto out_free_dentry;
+ 		}
+Index: linux-3.19.3/fs/ubifs/super.c
+===================================================================
+--- linux-3.19.3.orig/fs/ubifs/super.c
++++ linux-3.19.3/fs/ubifs/super.c
+@@ -267,6 +267,10 @@ static struct inode *ubifs_alloc_inode(s
+ 
+ 	memset((void *)ui + sizeof(struct inode), 0,
+ 	       sizeof(struct ubifs_inode) - sizeof(struct inode));
++
++	ui->sig_valid = 0;
++	ui->sig_i_version = ~0ULL;
++
+ 	mutex_init(&ui->ui_mutex);
+ 	spin_lock_init(&ui->ui_lock);
+ 	return &ui->vfs_inode;
+Index: linux-3.19.3/fs/ubifs/ubifs.h
+===================================================================
+--- linux-3.19.3.orig/fs/ubifs/ubifs.h
++++ linux-3.19.3/fs/ubifs/ubifs.h
+@@ -408,6 +408,10 @@ struct ubifs_inode {
+ 	unsigned int xattr:1;
+ 	unsigned int bulk_read:1;
+ 	unsigned int compr_type:2;
++
++	unsigned int sig_valid:1;
++	unsigned long long sig_i_version;
++
+ 	struct mutex ui_mutex;
+ 	spinlock_t ui_lock;
+ 	loff_t synced_i_size;
+Index: linux-3.19.3/include/linux/module.h
+===================================================================
+--- linux-3.19.3.orig/include/linux/module.h
++++ linux-3.19.3/include/linux/module.h
+@@ -449,6 +449,7 @@ extern struct key *request_asymmetric_ke
+ 				const u8 *key_id, size_t key_id_len);
+ extern int mod_extract_mpi_array(struct public_key_signature *pks,
+ 				const void *data, size_t len);
++int ioctl_verify(struct file *filp);
+ #endif
+ 
+ #ifdef CONFIG_MODULE_UNLOAD
+Index: linux-3.19.3/fs/ioctl.c
+===================================================================
+--- linux-3.19.3.orig/fs/ioctl.c
++++ linux-3.19.3/fs/ioctl.c
+@@ -15,6 +15,7 @@
+ #include <linux/writeback.h>
+ #include <linux/buffer_head.h>
+ #include <linux/falloc.h>
++#include <linux/module.h>
+ 
+ #include <asm/ioctls.h>
+ 

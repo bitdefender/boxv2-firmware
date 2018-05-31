@@ -1,0 +1,14 @@
+--- a/comcerto_otp.c	2017-07-24 18:40:08.413273653 +0300
++++ a/comcerto_otp.c	2017-07-24 18:40:18.200307233 +0300
+@@ -8,7 +8,11 @@
+ #include <string.h>
+ #include <errno.h>
+ #include <sys/stat.h>
++#ifdef __UCLIBC__
++#include "../../../../build_dir/target-arm_cortex-a9_uClibc-1.0.22_eabi/linux-comcerto2000_hgw/linux-3.19.3/arch/arm/mach-comcerto/include/mach/otp.h"
++#else
+ #include "../../../../build_dir/target-arm_cortex-a9_glibc-2.21_eabi/linux-comcerto2000_hgw/linux-3.19.3/arch/arm/mach-comcerto/include/mach/otp.h"
++#endif
+ 
+ int ioctl_wr_enable(int fd)
+ {

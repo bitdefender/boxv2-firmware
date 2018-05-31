@@ -1,0 +1,921 @@
+diff -pubr vapi-2.18.0/VAPI/common/vapi/announcement_fsm.c vapi-2.18.0_new/VAPI/common/vapi/announcement_fsm.c
+--- vapi-2.18.0/VAPI/common/vapi/announcement_fsm.c	2010-12-27 15:50:10.000000000 +0200
++++ vapi-2.18.0_new/VAPI/common/vapi/announcement_fsm.c	2012-01-03 18:22:36.000000000 +0200
+@@ -18,144 +18,6 @@
+ #include "appitf.h"
+ #include "comcerto-flow-control-types.h"
+ 
+-static void* VCORE_GetFrame(SHostSpeechData *pstHostSpeechData, int offset, int size)
+-{
+-	VSTATUS Status = SUCCESS;
+-	void *buf = NULL;
+-
+-	UT_Log(VCORE, DEBUG, "Entered VCORE_GetFrame offset = (%d), size = (%d)\n", offset, size);
+-
+-	if (pstHostSpeechData == NULL)
+-	{
+-		Status = VAPI_ERR_INVALID_PARAM;
+-		return NULL;
+-	}	
+-
+-	if (!pstHostSpeechData->pucBuffer) 
+-	{
+-		buf = UT_AllocMem(size);
+-		if (buf == NULL)
+-		{
+-			Status = VAPI_ERR_NOMEM;
+-			return NULL;
+-		}
+-
+-		if (pstHostSpeechData->iFileDisc == -1)
+-			pstHostSpeechData->iFileDisc = UT_Open(pstHostSpeechData->strAnnFileName, O_RDONLY, 0444);
+-
+-		if (pstHostSpeechData->iFileDisc < 0)
+-		{
+-			UT_ErrorLog(VCORE, "VCORE_GetFrame: announcement file could not be opened %s\n", pstHostSpeechData->strAnnFileName);
+-			Status = VAPI_ERR_INVALID_PARAM;
+-			goto err;
+-		}
+-
+-		if ((pstHostSpeechData->uiBufferLength = UT_Lseek(pstHostSpeechData->iFileDisc, 0L, SEEK_END)) < 0)
+-		{
+-			UT_ErrorLog(VCORE, "VCORE_GetFrame: file length invalid\n");
+-			Status = VAPI_ERR_INVALID_PARAM;
+-			goto err;
+-		}
+-
+-		if (pstHostSpeechData->uiBufferLength < offset + size)
+-		{
+-			UT_ErrorLog(VCORE, "VCORE_GetFrame: announcement file too small");
+-			Status = VAPI_ERR_INVALID_IMAGE;
+-			goto err;
+-		}
+-
+-		if ((UT_Lseek(pstHostSpeechData->iFileDisc, offset, SEEK_SET)) != offset)
+-		{
+-			UT_ErrorLog(VCORE,"VCORE_GetFrame: pointer could not be reset\n");
+-			Status = VAPI_ERR_INVALID_PARAM;
+-			goto err;
+-		}		
+-
+-		if (UT_Read(pstHostSpeechData->iFileDisc, (char *) buf, size) != size)
+-		{
+-			UT_ErrorLog(VCORE, "VCORE_GetFrame: error in reading announcement file\n");
+-			Status = VAPI_ERR_INVALID_PARAM;
+-			goto err;
+-		}
+-
+-		UT_Log(VCORE, DEBUG,  "VCORE_GetFrame: Exiting status(%d)\n", Status);
+-		return buf;
+-
+-err:
+-		UT_FreeMem(buf);
+-		UT_ErrorLog(VCORE,"VCORE_GetFrame: Exiting status(%d)\n", Status);
+-		return NULL;
+-
+-	}
+-	else 
+-	{
+-		UT_Log(VCORE, DEBUG,  "VCORE_GetFrame: Exiting status(%d)\n", Status);
+-     		return pstHostSpeechData->pucBuffer + offset;	
+-	}	
+-}
+-
+-static int VCORE_PutFrame(SHostSpeechData *pstHostSpeechData, void *buf, int offset, int size)
+-{
+-	VSTATUS Status = SUCCESS;
+-
+-	UT_Log(VCORE, DEBUG, "Entered VCORE_PutFrame offset = (%d), size = (%d)\n", offset, size);
+-
+-	if (pstHostSpeechData == NULL)
+-	{
+-		Status = VAPI_ERR_INVALID_PARAM;
+-		return Status;
+-	}	
+-
+-	if (!pstHostSpeechData->pucBuffer)
+-	{
+-		if (pstHostSpeechData->iFileDisc == -1)
+-			pstHostSpeechData->iFileDisc = UT_Open(pstHostSpeechData->strAnnFileName, O_WRONLY | O_CREAT, 0466);
+-
+-		if (pstHostSpeechData->iFileDisc < 0)
+-		{
+-			UT_ErrorLog(VCORE, "VCORE_PutFrame: announcement file could not be opened %s\n", pstHostSpeechData->strAnnFileName);
+-			Status = VAPI_ERR_INVALID_PARAM;
+-			goto out;
+-		}
+-
+-		if (UT_Lseek(pstHostSpeechData->iFileDisc, offset, SEEK_SET) != offset)
+-		{
+-			UT_ErrorLog(VCORE,"VCORE_PutFrame: pointer could not be reset\n");
+-			Status = VAPI_ERR_INVALID_PARAM;
+-			goto out;
+-		}		
+-
+-		if (UT_Write(pstHostSpeechData->iFileDisc, (char *) buf, size) != size)
+-		{
+-			UT_ErrorLog(VCORE, "VCORE_PutFrame: error in writing announcement file\n");
+-			Status = VAPI_ERR_INVALID_PARAM;
+-			goto out;
+-		}
+-
+-out:
+-		UT_Log(VCORE, DEBUG,  "VCORE_PutFrame: Exiting status(%d)\n", Status);
+-		return Status;
+-	}
+-	else 
+-	{
+-		UT_Log(VCORE, DEBUG,  "VCORE_PutFrame: Exiting status(%d)\n", Status);
+-     		UT_MemCopy ((void *) (pstHostSpeechData->pucBuffer + offset), buf, size);
+-		return Status;
+-	}	
+-}
+-
+-static void VCORE_CleanFrame(SHostSpeechData *pstHostSpeechData, void *buf)
+-{
+-	UT_Log(VCORE, DEBUG, "Entered VCORE_CleanFrame\n");
+-	if (!pstHostSpeechData->pucBuffer)
+-	{
+-		if (NULL != buf)
+-			UT_FreeMem(buf);
+-	}
+-
+-	UT_Log(VCORE, DEBUG, "VCORE_CleanFrame: Exit\n");
+-}
+-
+ VSTATUS VFSM_RecDataTransfer(IN SChnl * pstChnl, IN SVapiReq * pstVapiReq, IN U16 Event, IN gtl_msg_t * pstMsg)
+ {
+ 	VSTATUS Status = SUCCESS;
+@@ -198,8 +60,23 @@ VSTATUS VFSM_RecDataTransfer(IN SChnl * 
+ 		pstChnl->stRecPlayInfo.eStopAnnType = eDRAIN;
+ 		UT_MutexUnLock(&pstChnl->stRecPlayInfo.stSemRecPlay);
+ 
++		pstHostSpeechData->usStartOffset = 0;
+ 		pstHostSpeechData->iFileDisc = -1;
+ 
++		/*set wav header*/
++		if (pstHostSpeechData->uiHostSpeechDataFormat == eWavFormat) 
++		{
++			Status = VCORE_SetHdrWav(pstHostSpeechData);
++			if (Status != SUCCESS)
++			{
++				Status = VAPI_ERR_UNDEFINED;
++				goto finish;
++			}
++		}
++
++		/*add potential wav header len*/
++		pstHostSpeechData->uiBufferLength += pstHostSpeechData->usStartOffset;
++
+ 		pstVapiReq->pvExecData = UT_AllocMem(sizeof(SFrameInfo));
+ 
+ 		if (pstVapiReq->pvExecData == NULL)
+@@ -213,7 +90,9 @@ VSTATUS VFSM_RecDataTransfer(IN SChnl * 
+ 		pstFrameData->uiFrameLen = 0;
+ 		pstFrameData->ucIsHdrPresent = True;
+ 		pstFrameData->pucFrameBuffer = NULL;
+-		pstFrameData->uiBufferSizeLeft = pstHostSpeechData->uiBufferLength;
++
++		/*take in account potential wav header len, i.e. start write just after it*/
++		pstFrameData->uiBufferSizeLeft = pstHostSpeechData->uiBufferLength - pstHostSpeechData->usStartOffset;
+ 
+ 		if ((pstAllocatedPool = (U8 *) UT_AllocMem(MAX_FRAME_SIZE)) == NULL)
+ 		{
+@@ -354,7 +233,7 @@ VSTATUS VFSM_RecDataTransfer(IN SChnl * 
+ 							*((U16 *) pstFrameData->pucFrameBuffer + OFFSET_FOR_BUF_LEN) = 
+ 								UT_CPU2LE16(usActFrameLen - FRAME_HEADER_LEN);
+ 
+-							if (eNoHedFormat == pstHostSpeechData->uiHostSpeechDataFormat)
++							if (eHedFormat != pstHostSpeechData->uiHostSpeechDataFormat)
+ 							{
+ 								UT_MemCopy(pstFrameData->pucFrameBuffer, 
+ 										pstFrameData->pucFrameBuffer + FRAME_HEADER_LEN, 
+@@ -462,6 +341,10 @@ finish:
+ 	UT_Log(VCORE, DEBUG, "VFSM_RecDataTransfer: Completing req state(%u) status(%d) conn(%u)\n",
+ 			pstVapiReq->usReqState, Status, ConnId);
+ 
++	/*update wav header with latest length*/
++	if (pstHostSpeechData->uiHostSpeechDataFormat == eWavFormat)
++		Status = VCORE_UpdateHdrWav(pstHostSpeechData, pstHostSpeechData->uiBufferLength -pstFrameData->uiBufferSizeLeft);
++
+ 	UT_FreeMem(pstFrameData->pucFrameBuffer);
+ 
+ 	if (pstHostSpeechData->iFileDisc >= 0)
+@@ -520,8 +403,22 @@ VSTATUS VFSM_PlayDataTransfer(IN SChnl *
+ 	if (Event == FSM_EVENT_PLAY_REC_STOP || Event == FSM_EVENT_REC_PLAY_TERMINATOR)
+ 			pstHostSpeechData->uiProceedToStop = True;	
+ 
++	pstHostSpeechData->usStartOffset = 0;
++	pstHostSpeechData->iFileDisc = -1;
++
++	/*check wav content*/
++	if (pstHostSpeechData->uiHostSpeechDataFormat == eWavFormat) 
++	{
++		Status = VCORE_CheckWav(pstHostSpeechData);
++		if (Status != SUCCESS)
++		{
++			Status = VAPI_ERR_UNDEFINED;
++			goto finish;
++		}
++	}
++
+ 	/* played data doesn't contain headers for each frame */
+-	if (pstHostSpeechData->uiHostSpeechDataFormat == eNoHedFormat)
++	if (pstHostSpeechData->uiHostSpeechDataFormat != eHedFormat)
+ 	{
+ 		switch (pstHostSpeechData->ucDestCoding)
+ 		{
+@@ -561,7 +458,12 @@ VSTATUS VFSM_PlayDataTransfer(IN SChnl *
+ 			uiFrameTimeStamp = 80;
+ 			break;
+ 
+-		case eCS_RawPcm:
++		case eCS_RawPcm_8:
++			uiFrameLenConst = 320;
++			uiFrameTimeStamp = 160;
++			break;
++
++		case eCS_RawPcm_16:
+ 			uiFrameLenConst = 320;
+ 			uiFrameTimeStamp = 160;
+ 			break;			
+@@ -586,8 +488,6 @@ VSTATUS VFSM_PlayDataTransfer(IN SChnl *
+ 					VCORE_RecPlayTerminator, (void *) pstChnl);		
+ 		}
+ 
+-		pstHostSpeechData->iFileDisc = -1;
+-
+ 		UT_MutexLock(&pstChnl->stRecPlayInfo.stSemRecPlay);
+ 		pstChnl->stRecPlayInfo.uiStartPlayCount++;
+ 		/* internal default stop type in case of timeout or file end*/
+@@ -607,11 +507,11 @@ VSTATUS VFSM_PlayDataTransfer(IN SChnl *
+ 		/* just to initialize uiBufferLength in case of file*/
+ 		if(!pstHostSpeechData->pucBuffer)
+ 		{
+-			pstFrameData->pucFrameBuffer = VCORE_GetFrame(pstHostSpeechData, 0, FRAME_HEADER_LEN);
++			pstFrameData->pucFrameBuffer = VCORE_GetFrame(pstHostSpeechData, pstHostSpeechData->usStartOffset, FRAME_HEADER_LEN);
+ 			VCORE_CleanFrame(pstHostSpeechData, pstFrameData->pucFrameBuffer);
+ 		}
+ 
+-		pstFrameData->uiBufferSizeLeft = pstHostSpeechData->uiBufferLength;
++		pstFrameData->uiBufferSizeLeft = pstHostSpeechData->uiBufferLength - pstHostSpeechData->usStartOffset;
+ 		pstFrameData->ucIsHdrPresent = True;
+ 
+ 		/* form frame length*/
+diff -pubr vapi-2.18.0/VAPI/common/vapi/announcement_itf.c vapi-2.18.0_new/VAPI/common/vapi/announcement_itf.c
+--- vapi-2.18.0/VAPI/common/vapi/announcement_itf.c	2010-12-13 14:48:05.000000000 +0200
++++ vapi-2.18.0_new/VAPI/common/vapi/announcement_itf.c	2012-01-03 18:22:36.000000000 +0200
+@@ -126,7 +126,8 @@ VSTATUS VAPI_StartRecord(IN CONNID ConnI
+ 		(pstRecData->eCodingScheme != eCS_G726_16_audio) &&
+ 		(pstRecData->eCodingScheme != eCS_G726_24_audio) &&
+ 		(pstRecData->eCodingScheme != eCS_G726_40_audio) &&
+-		(pstRecData->eCodingScheme != eCS_RawPcm))
++		(pstRecData->eCodingScheme != eCS_RawPcm_8) &&
++		(pstRecData->eCodingScheme != eCS_RawPcm_16) )
+ 	{
+ 		UT_ErrorLog(APPITF, "VAPI_StartRecord: Invalid coding scheme %d\n", pstRecData->eCodingScheme);
+ 		Status = VAPI_ERR_INVALID_PARAM;
+@@ -593,7 +594,9 @@ VSTATUS VAPI_StartPlayback(IN CONNID Con
+ 		goto err_out;
+ 	}
+ 
+-	if (ePCM != pstPlayData->eDestinationType && eRTP != pstPlayData->eDestinationType && eBOTH != pstPlayData->eDestinationType)
++	if ((pstPlayData->eDestinationType != ePCM) && 
++		 (pstPlayData->eDestinationType != eRTP) && 
++		(pstPlayData->eDestinationType != eBOTH))
+ 	{
+ 		UT_ErrorLog(APPITF, "VAPI_StartPlayback: Invalid Source type %d\n", pstPlayData->eDestinationType);
+ 		Status = VAPI_ERR_INVALID_PARAM;
+@@ -616,7 +619,8 @@ VSTATUS VAPI_StartPlayback(IN CONNID Con
+ 		(pstPlayData->eCodingScheme != eCS_G726_16_audio) &&
+ 		(pstPlayData->eCodingScheme != eCS_G726_24_audio) &&
+ 		(pstPlayData->eCodingScheme != eCS_G726_40_audio) &&
+-		(pstPlayData->eCodingScheme != eCS_RawPcm))
++		(pstPlayData->eCodingScheme != eCS_RawPcm_8) &&
++		(pstPlayData->eCodingScheme != eCS_RawPcm_16) )
+ 	{
+ 		UT_ErrorLog(APPITF, "VAPI_StartPlayback: Invalid coding scheme %d\n", pstPlayData->eCodingScheme);
+ 		Status = VAPI_ERR_INVALID_PARAM;
+diff -pubr vapi-2.18.0/VAPI/common/vapi/vapi.h vapi-2.18.0_new/VAPI/common/vapi/vapi.h
+--- vapi-2.18.0/VAPI/common/vapi/vapi.h	2011-03-23 20:17:13.000000000 +0200
++++ vapi-2.18.0_new/VAPI/common/vapi/vapi.h	2012-01-03 18:22:36.000000000 +0200
+@@ -1138,7 +1138,8 @@ typedef enum {
+ /**Speech data format*/
+ typedef enum {
+ 	eHedFormat = 0,		/**< speech data with frame headers*/
+-	eNoHedFormat = 1	/**< speech data without frame headers*/
++	eNoHedFormat = 1,	/**< speech data without frame headers*/
++	eWavFormat = 2		/**< speech data in wav format*/
+ } ESpeechDataFormat;
+ 
+ /** Announcement Coding scheme*/
+@@ -1151,7 +1152,11 @@ typedef enum {
+ 	eCS_G726_16_audio = 15,		/**< 15: g726 16*/
+ 	eCS_G726_24_audio = 16,		/**< 16: g726 24*/
+ 	eCS_G726_40_audio = 17,		/**< 17: g726 40*/
+-	eCS_RawPcm = 127		/**< 127: 16 bit signed raw PCM audio*/
++	eCS_G722 = 62,			/**< 62: g722*/
++	eCS_eG729_1 = 63,		/**< 63: g729.1*/
++	eCS_eAMR_WB = 64,		/**< 64: AMR WB*/
++	eCS_RawPcm_16 = 126,		/**< 126: 16 bit signed raw PCM audio*/
++	eCS_RawPcm_8 = 127		/**< 127: 8 bit signed raw PCM audio*/
+ } ECodingScheme;
+ 
+ /** Stop announcement type */
+diff -pubr vapi-2.18.0/VAPI/common/vapi/vcore.c vapi-2.18.0_new/VAPI/common/vapi/vcore.c
+--- vapi-2.18.0/VAPI/common/vapi/vcore.c	2010-12-21 12:24:41.000000000 +0200
++++ vapi-2.18.0_new/VAPI/common/vapi/vcore.c	2012-01-03 18:22:36.000000000 +0200
+@@ -712,6 +712,516 @@ void VCORE_RecPlayTerminator(IN void *pv
+ 	VCORE_ProcessFSMhandler(pstChnl, FSM_EVENT_REC_PLAY_TERMINATOR, NULL);
+ }
+ 
++void* VCORE_GetFrame(SHostSpeechData *pstHostSpeechData, int offset, int size)
++{
++	VSTATUS Status = SUCCESS;
++	void *buf = NULL;
++
++	UT_Log(VCORE, INFO, "Entered VCORE_GetFrame offset = (%d), size = (%d)\n", offset, size);
++
++	if (pstHostSpeechData == NULL)
++	{
++		Status = VAPI_ERR_INVALID_PARAM;
++		return NULL;
++	}	
++
++	if (!pstHostSpeechData->pucBuffer) 
++	{
++		buf = UT_AllocMem(size);
++		if (buf == NULL)
++		{
++			Status = VAPI_ERR_NOMEM;
++			return NULL;
++		}
++
++		if (pstHostSpeechData->iFileDisc == -1)
++			pstHostSpeechData->iFileDisc = UT_Open(pstHostSpeechData->strAnnFileName, O_RDONLY, 0444);
++
++		if (pstHostSpeechData->iFileDisc < 0)
++		{
++			UT_ErrorLog(VCORE, "VCORE_GetFrame: announcement file could not be opened %s\n", pstHostSpeechData->strAnnFileName);
++			Status = VAPI_ERR_INVALID_PARAM;
++			goto err;
++		}
++
++		if ((pstHostSpeechData->uiBufferLength = UT_Lseek(pstHostSpeechData->iFileDisc, 0L, SEEK_END)) < 0)
++		{
++			UT_ErrorLog(VCORE, "VCORE_GetFrame: file length invalid\n");
++			Status = VAPI_ERR_INVALID_PARAM;
++			goto err;
++		}
++
++		if (pstHostSpeechData->uiBufferLength < offset + size)
++		{
++			UT_ErrorLog(VCORE, "VCORE_GetFrame: announcement file too small");
++			Status = VAPI_ERR_INVALID_IMAGE;
++			goto err;
++		}
++
++		if ((UT_Lseek(pstHostSpeechData->iFileDisc, offset, SEEK_SET)) != offset)
++		{
++			UT_ErrorLog(VCORE,"VCORE_GetFrame: pointer could not be reset\n");
++			Status = VAPI_ERR_INVALID_PARAM;
++			goto err;
++		}		
++
++		if (UT_Read(pstHostSpeechData->iFileDisc, (char *) buf, size) != size)
++		{
++			UT_ErrorLog(VCORE, "VCORE_GetFrame: error in reading announcement file\n");
++			Status = VAPI_ERR_INVALID_PARAM;
++			goto err;
++		}
++
++		UT_Log(VCORE, INFO,  "VCORE_GetFrame: Exiting status(%d)\n", Status);
++		return buf;
++
++err:
++		UT_FreeMem(buf);
++		UT_ErrorLog(VCORE,"VCORE_GetFrame: Exiting status(%d)\n", Status);
++		return NULL;
++
++	}
++	else
++	{
++		UT_Log(VCORE, INFO,  "VCORE_GetFrame: Exiting status(%d)\n", Status);
++		return pstHostSpeechData->pucBuffer + offset;	
++	}
++}
++
++int VCORE_PutFrame(SHostSpeechData *pstHostSpeechData, void *buf, int offset, int size)
++{
++	VSTATUS Status = SUCCESS;
++
++	UT_Log(VCORE, INFO, "Entered VCORE_PutFrame offset = (%d), size = (%d)\n", offset, size);
++
++	if (pstHostSpeechData == NULL)
++	{
++		Status = VAPI_ERR_INVALID_PARAM;
++		return Status;
++	}
++
++	if (!pstHostSpeechData->pucBuffer)
++	{
++		if (pstHostSpeechData->iFileDisc == -1)
++			pstHostSpeechData->iFileDisc = UT_Open(pstHostSpeechData->strAnnFileName, O_RDWR | O_CREAT, 0466);
++
++		if (pstHostSpeechData->iFileDisc < 0)
++		{
++			UT_ErrorLog(VCORE, "VCORE_PutFrame: announcement file could not be opened %s\n", pstHostSpeechData->strAnnFileName);
++			Status = VAPI_ERR_INVALID_PARAM;
++			goto out;
++		}
++
++		if (UT_Lseek(pstHostSpeechData->iFileDisc, offset, SEEK_SET) != offset)
++		{
++			UT_ErrorLog(VCORE,"VCORE_PutFrame: pointer could not be reset\n");
++			Status = VAPI_ERR_INVALID_PARAM;
++			goto out;
++		}
++
++		if (UT_Write(pstHostSpeechData->iFileDisc, (char *) buf, size) != size)
++		{
++			UT_ErrorLog(VCORE, "VCORE_PutFrame: error in writing announcement file\n");
++			Status = VAPI_ERR_INVALID_PARAM;
++			goto out;
++		}
++
++out:
++		UT_Log(VCORE, INFO,  "VCORE_PutFrame: Exiting status(%d)\n", Status);
++		return Status;
++	}
++	else
++	{
++		UT_Log(VCORE, INFO,  "VCORE_PutFrame: Exiting status(%d)\n", Status);
++		UT_MemCopy ((void *) (pstHostSpeechData->pucBuffer + offset), buf, size);
++		return Status;
++	}
++}
++
++void VCORE_CleanFrame(SHostSpeechData *pstHostSpeechData, void *buf)
++{
++	UT_Log(VCORE, INFO, "Entered VCORE_CleanFrame\n");
++	if (!pstHostSpeechData->pucBuffer)
++	{
++		if (NULL != buf)
++			UT_FreeMem(buf);
++	}
++
++	UT_Log(VCORE, INFO, "VCORE_CleanFrame: Exit\n");
++}
++
++/****************************************************************************
++ * VCORE_CheckWav
++ ***************************************************************************/
++VSTATUS VCORE_CheckWav(SHostSpeechData *pstHostSpeechData)
++{
++	U8 *pucChunkBuf;
++	char *pChunkName;
++	char chunk_name[4], chunk_name_temp[4];
++	U16 usChunkOffset = 0;
++	U8 usChaunkMask = 0;
++	VSTATUS Status;
++
++	pucChunkBuf = VCORE_GetFrame(pstHostSpeechData, 0, RIFF_CHUNK_LEN);
++	if (!pucChunkBuf)
++	{
++		Status = VAPI_ERR_UNDEFINED;
++		goto err;
++	}
++
++	sprintf(chunk_name, "%s", "RIFF");
++	if (UT_LE2CPU32(*((U32 *) &pucChunkBuf[0])) != *((U32 *) chunk_name))
++	{
++		UT_ErrorLog(VCORE, "VCORE_CheckWav: invalid RIFF Chunk Id (0x%04X)\n", *((U32 *) &pucChunkBuf[0]));
++
++		VCORE_CleanFrame(pstHostSpeechData, pucChunkBuf);
++		Status = VAPI_ERR_UNDEFINED;
++		goto err;
++	}
++
++	sprintf(chunk_name, "%s", "WAVE");
++	if (UT_LE2CPU32(*((U32 *) &pucChunkBuf[RIFF_TYPE_OFFSET])) != *((U32 *) chunk_name))
++	{
++		UT_ErrorLog(VCORE, "VCORE_CheckWav: invalid RIFF Chunk Type (0x%04X)\n", *((U32 *) &pucChunkBuf[0]));
++
++		VCORE_CleanFrame(pstHostSpeechData, pucChunkBuf);
++		Status = VAPI_ERR_UNDEFINED;
++		goto err;
++	}
++
++	VCORE_CleanFrame(pstHostSpeechData, pucChunkBuf);
++
++	usChunkOffset += sizeof(struct _SRiffChunk);
++
++	while (!((usChaunkMask & CHUNK_ID_FMT) && (usChaunkMask & CHUNK_ID_DATA)) && (usChunkOffset < pstHostSpeechData->uiBufferLength))
++	{
++		pChunkName = VCORE_GetFrame(pstHostSpeechData, usChunkOffset, 4);
++		if (!pucChunkBuf)
++		{
++			Status = VAPI_ERR_UNDEFINED;
++			goto err;
++		}
++
++		UT_MemCopy(chunk_name_temp, pChunkName, 4);
++		VCORE_CleanFrame(pstHostSpeechData, pChunkName);
++
++		*((U32 *) chunk_name_temp) = UT_LE2CPU32(*((U32 *) chunk_name_temp));
++
++		sprintf(chunk_name, "%s", "fmt ");
++		if (*((U32 *) chunk_name_temp) == *((U32 *) chunk_name))
++		{
++			usChaunkMask |= CHUNK_ID_FMT;
++			pucChunkBuf = VCORE_GetFrame(pstHostSpeechData, usChunkOffset, sizeof(struct _SFmtChunk));
++			if (!pucChunkBuf)
++			{
++				Status = VAPI_ERR_UNDEFINED;
++				goto err;
++			}
++
++			UT_Log(VCORE, INFO, "VCORE_CheckWav: fmt chunk found:\n"
++						"	Compression code (%d)\n"
++						"	Number of channels (%d)\n"
++						"	Sample rate (%d)\n"
++						"	Average bytes per second (%d)\n"
++						"	Block align  (%d)\n"
++						"	Significant bits per sample  (%d)\n", 
++						UT_LE2CPU32(((struct _SFmtChunk *) pucChunkBuf)->usCompressionCode),
++						UT_LE2CPU32(((struct _SFmtChunk *) pucChunkBuf)->usChnlNum),
++						UT_LE2CPU32(((struct _SFmtChunk *) pucChunkBuf)->uiSampleRate),
++						UT_LE2CPU32(((struct _SFmtChunk *) pucChunkBuf)->uiAvBytesPerSecond),
++						UT_LE2CPU32(((struct _SFmtChunk *) pucChunkBuf)->usBlockAlign),
++						UT_LE2CPU32(((struct _SFmtChunk *) pucChunkBuf)->usSignBitsPerSample));
++
++			if(UT_LE2CPU32(((struct _SFmtChunk *) pucChunkBuf)->usChnlNum) != 1)
++			{
++				UT_ErrorLog(VCORE, "VCORE_CheckWav: Number of channels (%d) is not supported\n",
++						((struct _SFmtChunk *) pucChunkBuf)->usChnlNum);
++				Status = VAPI_ERR_UNDEFINED;
++				goto err;
++			}
++
++			if(UT_LE2CPU32(((struct _SFmtChunk *) pucChunkBuf)->uiSampleRate) != 8000)
++			{
++				UT_ErrorLog(VCORE, "VCORE_CheckWav: Sample rate (%d) is not supported\n",
++						((struct _SFmtChunk *) pucChunkBuf)->uiSampleRate);
++				Status = VAPI_ERR_UNDEFINED;
++				goto err;
++			}
++
++
++			if (UT_LE2CPU32((((struct _SFmtChunk *) pucChunkBuf)->usSignBitsPerSample) != 8) && 
++					(UT_LE2CPU32(((struct _SFmtChunk *) pucChunkBuf)->usSignBitsPerSample) != 16))
++			{
++				UT_ErrorLog(VCORE, "VCORE_CheckWav: Significant bits per sample (%d) is not supported\n",
++						((struct _SFmtChunk *) pucChunkBuf)->usSignBitsPerSample);
++				Status = VAPI_ERR_UNDEFINED;
++				goto err;
++			}
++
++			/*update announcement parameters according to ones got from fmt chunk of wav*/
++			switch (UT_LE2CPU32(((struct _SFmtChunk *) pucChunkBuf)->usCompressionCode))
++			{
++				case 0x0001:
++					if (((struct _SFmtChunk *) pucChunkBuf)->usSignBitsPerSample == 16)
++						pstHostSpeechData->ucSrcCoding = eCS_RawPcm_16;
++					else
++						pstHostSpeechData->ucSrcCoding = eCS_RawPcm_8;
++					break;
++
++				case 0x0006:
++					pstHostSpeechData->ucSrcCoding = eCS_G711_ALAW;
++					break;
++
++				case 0x0007:
++					pstHostSpeechData->ucSrcCoding = eCS_G711_ULAW;
++					break;
++
++				default:
++					UT_ErrorLog(VCORE, "VCORE_CheckWav: Compression code (%d) is not supported\n", 
++							((struct _SFmtChunk *) pucChunkBuf)->usCompressionCode);
++
++					VCORE_CleanFrame(pstHostSpeechData, pucChunkBuf);
++					Status = VAPI_ERR_UNDEFINED;
++					goto err;
++
++					break;
++			}
++
++			usChunkOffset += sizeof(struct _SFmtChunk) + ((struct _SFmtChunk *) pucChunkBuf)->usExtraFormatBytes;
++			VCORE_CleanFrame(pstHostSpeechData, pucChunkBuf);
++			continue;
++		}
++
++		sprintf(chunk_name, "%s", "fact");
++		if (*((U32 *) chunk_name_temp) == *((U32 *) chunk_name))
++		{
++			usChaunkMask |= CHUNK_ID_FACT;
++			pucChunkBuf = VCORE_GetFrame(pstHostSpeechData, usChunkOffset, sizeof(struct _SFactChunk));
++			if (!pucChunkBuf)
++			{
++				Status = VAPI_ERR_UNDEFINED;
++				goto err;
++			}
++
++			UT_Log(VCORE, INFO, "VCORE_CheckWav: fact chunk found: Sample length (%d)\n", 
++						UT_LE2CPU32(((struct _SFactChunk *) pucChunkBuf)->uiSampleLen));
++
++			usChunkOffset += sizeof(struct _SFactChunk);
++			VCORE_CleanFrame(pstHostSpeechData, pucChunkBuf);			
++			continue;
++		}
++
++		sprintf(chunk_name, "%s", "data");
++		if (*((U32 *) chunk_name_temp) == *((U32 *) chunk_name))
++		{
++			usChaunkMask |= CHUNK_ID_DATA;
++			pucChunkBuf = VCORE_GetFrame(pstHostSpeechData, usChunkOffset, sizeof(struct _SDataChunk));
++			if (!pucChunkBuf)
++			{
++				Status = VAPI_ERR_UNDEFINED;
++				goto err;
++			}
++
++			UT_Log(VCORE, INFO, "VCORE_CheckWav: data chunk found: Sample size (%d)\n", 
++						UT_LE2CPU32(((struct _SDataChunk *) pucChunkBuf)->uiChunkDataSize));
++
++			/*update announcement parameters according to ones got from wav*/
++			pstHostSpeechData->uiBufferLength = UT_LE2CPU32(((struct _SDataChunk *) pucChunkBuf)->uiChunkDataSize);
++			pstHostSpeechData->usStartOffset = usChunkOffset + 0x08;
++
++			usChunkOffset += sizeof(struct _SDataChunk) + ((struct _SDataChunk *) pucChunkBuf)->uiChunkDataSize;
++			VCORE_CleanFrame(pstHostSpeechData, pucChunkBuf);
++			continue;
++		}
++
++		/*no supported chunk found at current offset, shift adress to next byte*/
++		usChunkOffset++;
++	}
++
++	if (!(usChaunkMask & CHUNK_ID_FMT) && (usChaunkMask & CHUNK_ID_DATA))
++	{
++		UT_ErrorLog(VCORE, "VCORE_CheckWav: either fmt or data chunk not found!\n");
++		Status = VAPI_ERR_UNDEFINED;
++		goto err;
++	}
++
++	return SUCCESS;
++err:
++	return Status;
++}
++
++/****************************************************************************
++ * VCORE_SetHdrWav
++ ***************************************************************************/
++VSTATUS VCORE_SetHdrWav(SHostSpeechData *pstHostSpeechData)
++{
++	void *pvChunkBuf;
++	U16 usChunkOffset = 0;
++	VSTATUS Status;
++
++	/*allocate max chunk size, it is fmt*/
++	pvChunkBuf = UT_Calloc(1, sizeof(struct _SFmtChunk));
++	if (pvChunkBuf == NULL)
++	{
++		UT_ErrorLog(VCORE, "VCORE_SetHdrWav: no memory available\n");
++		Status = VAPI_ERR_NOMEM;
++		goto err;
++	}
++
++	/*set riff chunk*/
++	sprintf(((struct _SRiffChunk *) pvChunkBuf)->srtChunkId, "%s", "RIFF");
++	((struct _SRiffChunk *) pvChunkBuf)->uiChunkDataSize = UT_CPU2LE32(0x32);
++	sprintf(((struct _SRiffChunk *) pvChunkBuf)->srtRiffType, "%s", "WAVE");
++
++	Status = VCORE_PutFrame(pstHostSpeechData, pvChunkBuf, usChunkOffset, sizeof(struct _SRiffChunk));
++	if (Status != SUCCESS)
++		goto err;
++
++
++	usChunkOffset += sizeof(struct _SRiffChunk);
++
++	/*set fmt chunk*/
++	sprintf(((struct _SFmtChunk *) pvChunkBuf)->srtChunkId, "%s", "fmt ");
++	((struct _SFmtChunk *) pvChunkBuf)->uiChunkDataSize = UT_CPU2LE32(0x12);
++	((struct _SFmtChunk *) pvChunkBuf)->usChnlNum = UT_CPU2LE16(1);
++	((struct _SFmtChunk *) pvChunkBuf)->uiSampleRate = UT_CPU2LE32(8000);
++	((struct _SFmtChunk *) pvChunkBuf)->uiAvBytesPerSecond = UT_CPU2LE32(8000);
++	((struct _SFmtChunk *) pvChunkBuf)->usBlockAlign = UT_CPU2LE16(1);
++	((struct _SFmtChunk *) pvChunkBuf)->usSignBitsPerSample = UT_CPU2LE16(8);
++	((struct _SFmtChunk *) pvChunkBuf)->usExtraFormatBytes = 0;
++
++	switch (pstHostSpeechData->ucDestCoding)
++	{
++		case eCS_RawPcm_8:
++		case eCS_RawPcm_16:
++			((struct _SFmtChunk *) pvChunkBuf)->usCompressionCode = UT_CPU2LE16(0x0001);
++			break;
++
++		case eCS_G711_ALAW:
++			((struct _SFmtChunk *) pvChunkBuf)->usCompressionCode = UT_CPU2LE16(0x0006);
++			break;
++
++		case eCS_G711_ULAW:
++			((struct _SFmtChunk *) pvChunkBuf)->usCompressionCode = UT_CPU2LE16(0x0007);
++			break;
++
++		default:
++			UT_ErrorLog(VCORE, "VCORE_SetHdrWav: Destination coding for wav (%d) is not supported\n", 
++				pstHostSpeechData->ucDestCoding);
++			Status = VAPI_ERR_UNDEFINED;
++			goto err;
++	}
++
++	Status = VCORE_PutFrame(pstHostSpeechData, pvChunkBuf, usChunkOffset, sizeof(struct _SFmtChunk));
++	if (Status != SUCCESS)
++		goto err;
++
++
++	usChunkOffset += sizeof(struct _SFmtChunk);
++
++	/*set fact chunk*/
++	sprintf(((struct _SFactChunk *) pvChunkBuf)->srtChunkId, "%s", "fact");
++	((struct _SFactChunk *) pvChunkBuf)->uiChunkDataSize = UT_CPU2LE32(0x04);
++	((struct _SFactChunk *) pvChunkBuf)->uiSampleLen = 0;
++
++	Status = VCORE_PutFrame(pstHostSpeechData, pvChunkBuf, usChunkOffset, sizeof(struct _SFactChunk));
++	if (Status != SUCCESS)
++		goto err;
++
++	usChunkOffset += sizeof(struct _SFactChunk);
++
++	/*set data chunk*/
++	sprintf(((struct _SDataChunk *) pvChunkBuf)->srtChunkId, "%s", "data");
++	((struct _SDataChunk *) pvChunkBuf)->uiChunkDataSize = 0;
++
++	Status = VCORE_PutFrame(pstHostSpeechData, pvChunkBuf, usChunkOffset, sizeof(struct _SDataChunk));
++	if (Status != SUCCESS)
++		goto err;
++
++	/*add chunk id and data size fields of data chunk*/
++	pstHostSpeechData->usStartOffset = usChunkOffset + 0x08;
++
++	UT_free(pvChunkBuf);
++	return SUCCESS;
++
++err:
++	UT_free(pvChunkBuf);
++	return Status;
++}
++
++/****************************************************************************
++ * VCORE_UpdateHdrWav
++ ***************************************************************************/
++VSTATUS VCORE_UpdateHdrWav(SHostSpeechData *pstHostSpeechData, U32 uiLen)
++{
++	void *pvChunkBuf;
++	U16 usChunkOffset = 0;
++	U32 uiUpdateLen;
++	VSTATUS Status;
++
++	/*sub chunk id and data size fields of riff chunk*/
++	uiUpdateLen = uiLen -0x08;
++
++	/*update riff chunk*/
++	pvChunkBuf= VCORE_GetFrame(pstHostSpeechData, usChunkOffset, sizeof(struct _SRiffChunk));
++	if (!pvChunkBuf)
++	{
++		Status = VAPI_ERR_UNDEFINED;
++		goto err;
++	}
++
++	((struct _SRiffChunk *) pvChunkBuf)->uiChunkDataSize = UT_CPU2LE32(uiUpdateLen );
++	Status = VCORE_PutFrame(pstHostSpeechData, pvChunkBuf, usChunkOffset, sizeof(struct _SRiffChunk));
++	if (Status != SUCCESS)
++		goto err_put;
++
++	VCORE_CleanFrame(pstHostSpeechData, pvChunkBuf);
++	usChunkOffset += sizeof(struct _SRiffChunk);
++
++	/*skip fmt chunk*/
++	usChunkOffset += sizeof(struct _SFmtChunk);
++
++	/*update fact chunk*/
++	pvChunkBuf= VCORE_GetFrame(pstHostSpeechData, usChunkOffset, sizeof(struct _SFactChunk));
++	if (!pvChunkBuf)
++	{
++		Status = VAPI_ERR_UNDEFINED;
++		goto err;
++	}
++
++	/*sub start offset length and sub chunk id and data size fields of data chunk*/
++	uiUpdateLen -= pstHostSpeechData->usStartOffset -0x08;
++
++	((struct _SFactChunk *) pvChunkBuf)->uiSampleLen = UT_CPU2LE32(uiUpdateLen);
++	Status = VCORE_PutFrame(pstHostSpeechData, pvChunkBuf, usChunkOffset, sizeof(struct _SFactChunk));
++	if (Status != SUCCESS)
++		goto err_put;
++
++	VCORE_CleanFrame(pstHostSpeechData, pvChunkBuf);
++	usChunkOffset += sizeof(struct _SFactChunk);
++
++	/*update data chunk*/
++	pvChunkBuf= VCORE_GetFrame(pstHostSpeechData, usChunkOffset, sizeof(struct _SDataChunk));
++	if (!pvChunkBuf)
++	{
++		Status = VAPI_ERR_UNDEFINED;
++		goto err;
++	}
++
++	((struct _SDataChunk *) pvChunkBuf)->uiChunkDataSize = UT_CPU2LE32(uiUpdateLen);
++	Status = VCORE_PutFrame(pstHostSpeechData, pvChunkBuf, usChunkOffset, sizeof(struct _SDataChunk));
++	if (Status != SUCCESS)
++		goto err_put;
++
++	VCORE_CleanFrame(pstHostSpeechData, pvChunkBuf);
++	return SUCCESS;
++
++err_put:
++	VCORE_CleanFrame(pstHostSpeechData, pvChunkBuf);
++err:
++	return Status;
++}
++
+ /****************************************************************************
+  * VCORE_ChannelResetTimeoutHdlr : The function does the following things -
+  ***************************************************************************/
+diff -pubr vapi-2.18.0/VAPI/common/vapi/vcore.h vapi-2.18.0_new/VAPI/common/vapi/vcore.h
+--- vapi-2.18.0/VAPI/common/vapi/vcore.h	2010-12-09 11:24:57.000000000 +0200
++++ vapi-2.18.0_new/VAPI/common/vapi/vcore.h	2012-01-03 18:22:36.000000000 +0200
+@@ -54,6 +54,12 @@
+ #define MAX_FRAME_LEN_SYNCEOF		sizeof(struct _SYNCEOF) - sizeof(struct comcerto_api_hdr)
+ #define MAX_FRAME_LEN_EXT_SYNCEOF	1500 - sizeof(struct comcerto_api_hdr)
+ 
++#define RIFF_CHUNK_LEN		12
++#define RIFF_TYPE_OFFSET	8
++#define CHUNK_ID_FMT		(1 << 0)
++#define CHUNK_ID_FACT		(1 << 1)
++#define CHUNK_ID_DATA		(1 << 2)
++
+ #define H245_MAX_LEN	248
+ #define H245_MSG_HDR_LEN	4
+ 
+@@ -689,6 +695,7 @@ typedef struct _SHostSpeechData {
+ 	U32 uiTimeOut;
+ 	U8 ucDestCoding;
+ 	EPlaybackMode ePlaybackMode;
++	U16 usStartOffset;
+ 	U8 *pucBuffer;
+ 	U32 uiBufferLength;
+ 	U8 *pucOutBuffer;
+@@ -706,6 +713,36 @@ typedef struct _SHostSpeechData {
+ 	SMutex stHostSpeechDataMutex;
+ } SHostSpeechData;
+ 
++struct _SRiffChunk{
++	char srtChunkId[4];
++	U32 uiChunkDataSize;
++	char srtRiffType[4];
++} ATTRIBUTE_PACKED;
++
++struct _SFmtChunk{
++	char srtChunkId[4];
++	U32 uiChunkDataSize;
++	U16 usCompressionCode;
++	U16 usChnlNum;
++	U32 uiSampleRate;
++	U32 uiAvBytesPerSecond;
++	U16 usBlockAlign;
++	U16 usSignBitsPerSample;
++	U16 usExtraFormatBytes;
++} ATTRIBUTE_PACKED;
++
++struct _SFactChunk{
++	char srtChunkId[4];
++	U32 uiChunkDataSize;
++	U32 uiSampleLen;
++} ATTRIBUTE_PACKED;
++
++struct _SDataChunk{
++	char srtChunkId[4];
++	U32 uiChunkDataSize;
++	U8 ucSampleData;
++} ATTRIBUTE_PACKED;;
++
+ typedef struct _SH245Data {
+ 	U16 uiH245MsgLength;
+ 	U8 *ptrH245Msg;
+@@ -1142,6 +1179,14 @@ VSTATUS VCORE_HandleFrame(IN gtl_msg_t *
+ 
+ void VCORE_RecPlayTerminator(IN void *pvData);
+ 
++void* VCORE_GetFrame(SHostSpeechData *pstHostSpeechData, int offset, int size);
++int VCORE_PutFrame(SHostSpeechData *pstHostSpeechData, void *buf, int offset, int size);
++void VCORE_CleanFrame(SHostSpeechData *pstHostSpeechData, void *buf);
++
++VSTATUS VCORE_CheckWav(SHostSpeechData *pstHostSpeechData);
++VSTATUS VCORE_SetHdrWav(SHostSpeechData *pstHostSpeechData);
++VSTATUS VCORE_UpdateHdrWav(SHostSpeechData *pstHostSpeechData, U32 uiLen);
++
+ void VCORE_ChannelResetTimeoutHdlr(IN void *pvData);
+ 
+ Boolean VCORE_IsRecPlayTerminatorMsg(gtl_msg_t * pstMsg);
+

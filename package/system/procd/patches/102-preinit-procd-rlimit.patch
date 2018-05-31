@@ -1,0 +1,24 @@
+Index: procd-2015-08-16/initd/preinit.c
+===================================================================
+--- procd-2015-08-16.orig/initd/preinit.c
++++ procd-2015-08-16/initd/preinit.c
+@@ -15,6 +15,7 @@
+ #include <sys/stat.h>
+ #include <sys/types.h>
+ #include <sys/mount.h>
++#include <sys/resource.h>
+ 
+ #include <libubox/uloop.h>
+ #include <libubox/utils.h>
+@@ -73,6 +74,11 @@ spawn_procd(struct uloop_process *proc,
+ 		setenv("DBGLVL", dbg, 1);
+ 	}
+ 
++	/*struct rlimit rlim;
++	rlim.rlim_cur = RLIM_INFINITY;
++	rlim.rlim_max = RLIM_INFINITY;
++	setrlimit(RLIMIT_CORE, &rlim);*/
++
+ 	execvp(argv[0], argv);
+ }
+ 

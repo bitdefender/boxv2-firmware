@@ -1,0 +1,42 @@
+diff --git a/fs/ubifs/super.c b/fs/ubifs/super.c
+index b73811bd7676..bff1e8d6f7bd 100644
+--- a/fs/ubifs/super.c
++++ b/fs/ubifs/super.c
+@@ -931,6 +931,7 @@ enum {
+ 	Opt_chk_data_crc,
+ 	Opt_no_chk_data_crc,
+ 	Opt_override_compr,
++	Opt_i_version,
+ 	Opt_err,
+ };
+ 
+@@ -942,6 +943,7 @@ static const match_table_t tokens = {
+ 	{Opt_chk_data_crc, "chk_data_crc"},
+ 	{Opt_no_chk_data_crc, "no_chk_data_crc"},
+ 	{Opt_override_compr, "compr=%s"},
++	{Opt_i_version, "i_version"},
+ 	{Opt_err, NULL},
+ };
+ 
+@@ -986,6 +988,7 @@ static int ubifs_parse_options(struct ubifs_info *c, char *options,
+ 		return 0;
+ 
+ 	while ((p = strsep(&options, ","))) {
++		struct super_block *sb = c->vfs_sb;
+ 		int token;
+ 
+ 		if (!*p)
+@@ -1042,10 +1045,12 @@ static int ubifs_parse_options(struct ubifs_info *c, char *options,
+ 			c->default_compr = c->mount_opts.compr_type;
+ 			break;
+ 		}
++		case Opt_i_version:
++			sb->s_flags |= MS_I_VERSION;
++			break;
+ 		default:
+ 		{
+ 			unsigned long flag;
+-			struct super_block *sb = c->vfs_sb;
+ 
+ 			flag = parse_standard_option(p);
+ 			if (!flag) {

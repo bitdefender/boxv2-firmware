@@ -1,0 +1,24 @@
+#!/bin/sh /etc/rc.common
+# Copyright (C) 2006 OpenWrt.org
+
+START=53
+
+start() {
+	echo "Warning: at next boot Voice and Fast Path won't be available"
+	/etc/init.d/asterisk disable
+	/etc/init.d/matisse disable
+	/etc/init.d/cmm disable
+	/etc/init.d/fci disable
+	/etc/init.d/fpp disable
+	/etc/init.d/fpp_enable disable
+}
+
+stop(){
+        echo "Voice and Fast Path will be available at next boot"
+        /etc/init.d/asterisk enable
+        /etc/init.d/matisse enable
+        /etc/init.d/cmm enable
+        /etc/init.d/fci enable
+        /etc/init.d/fpp enable
+        /etc/init.d/fpp_enable enable
+}

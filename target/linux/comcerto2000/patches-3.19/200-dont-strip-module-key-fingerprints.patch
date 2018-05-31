@@ -1,0 +1,15 @@
+--- a/crypto/asymmetric_keys/x509_public_key.c	2017-04-27 15:39:46.773784269 +0300
++++ b/crypto/asymmetric_keys/x509_public_key.c	2017-04-27 15:38:50.745772073 +0300
+@@ -294,10 +294,12 @@
+ 		srlen = cert->raw_serial_size;
+ 		q = cert->raw_serial;
+ 	}
++	/*
+ 	if (srlen > 1 && *q == 0) {
+ 		srlen--;
+ 		q++;
+ 	}
++	*/
+ 
+ 	ret = -ENOMEM;
+ 	desc = kmalloc(sulen + 2 + srlen * 2 + 1, GFP_KERNEL);

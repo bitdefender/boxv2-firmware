@@ -1,0 +1,56 @@
+#!/bin/sh /etc/rc.common
+# Copyright (C) 2006 OpenWrt.org
+
+START=50
+
+start() {
+        novoip=0
+        if [ -e /proc/partno ]; then
+         PARTNO=`cat /proc/partno | awk '{print $1}'`
+         if [ $PARTNO == 'M83262G' ] || [ $PARTNO == 'M83252G' ] || [ $PARTNO == 'M83242G' ]; then
+          novoip=1
+         fi
+        fi
+
+        if [ $novoip -eq 0 ]; then
+	  ifconfig eth1 up
+         fi
+	
+	#Loading csmencaps
+	echo "Starting csmencaps"
+	insmod csmencaps
+
+        if [ $novoip -eq 0 ]; then
+		insmod fpp_csme
+         fi
+	echo "done"
+}
+
+stop() {	
+        novoip=0
+        if [ -e /proc/partno ]; then
+         PARTNO=`cat /proc/partno | awk '{print $1}'`
+         if [ $PARTNO == 'M83262G' ] || [ $PARTNO == 'M83252G' ] || [ $PARTNO == 'M83242G' ]; then
+          novoip=1
+         fi
+        fi
+
+	/etc/init.d/cmm stop
+
+	#stop fci/fpp
+	/etc/init.d/fci stop
+	/etc/init.d/fpp stop
+	/etc/init.d/fpp_enable stop
+
+	sleep 1
+
+	#Unloading csmencaps
+        if [ $novoip -eq 0 ]; then
+		rmmod fpp_csme
+        fi
+	rmmod csmencaps
+
+        if [ $novoip -eq 0 ]; then
+	  ifconfig eth1 down
+         fi
+}

@@ -1,0 +1,83 @@
+From 647d0c3071ada6f2c9d4f9e79ad44fb6b3d783a3 Mon Sep 17 00:00:00 2001
+From: Richard Weinberger <richard@nod.at>
+Date: Tue, 23 Sep 2014 19:29:05 +0200
+Subject: UBI: Fastmap: Ensure that only one fastmap work is scheduled
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+[ Upstream commit 19371d73c9bd31a8e634ec5a80fc19fcd7714481 ]
+
+If the WL pool runs out of PEBs we schedule a fastmap write
+to refill it as soon as possible.
+Ensure that only one at a time is scheduled otherwise we might end in
+a fastmap write storm because writing the fastmap can schedule another
+write if bitflips are detected.
+
+Signed-off-by: Richard Weinberger <richard@nod.at>
+Reviewed-by: Tanya Brokhman <tlinder@codeaurora.org>
+Reviewed-by: Guido Martínez <guido@vanguardiasur.com.ar>
+Signed-off-by: Sasha Levin <sasha.levin@oracle.com>
+---
+ drivers/mtd/ubi/ubi.h | 4 +++-
+ drivers/mtd/ubi/wl.c  | 8 +++++++-
+ 2 files changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/mtd/ubi/ubi.h b/drivers/mtd/ubi/ubi.h
+index 320fc38..20640c6 100644
+--- a/drivers/mtd/ubi/ubi.h
++++ b/drivers/mtd/ubi/ubi.h
+@@ -426,6 +426,7 @@ struct ubi_debug_info {
+  * @fm_size: fastmap size in bytes
+  * @fm_sem: allows ubi_update_fastmap() to block EBA table changes
+  * @fm_work: fastmap work queue
++ * @fm_work_scheduled: non-zero if fastmap work was scheduled
+  *
+  * @used: RB-tree of used physical eraseblocks
+  * @erroneous: RB-tree of erroneous used physical eraseblocks
+@@ -437,7 +438,7 @@ struct ubi_debug_info {
+  * @pq_head: protection queue head
+  * @wl_lock: protects the @used, @free, @pq, @pq_head, @lookuptbl, @move_from,
+  *	     @move_to, @move_to_put @erase_pending, @wl_scheduled, @works,
+- *	     @erroneous, and @erroneous_peb_count fields
++ *	     @erroneous, @erroneous_peb_count, and @fm_work_scheduled fields
+  * @move_mutex: serializes eraseblock moves
+  * @work_sem: used to wait for all the scheduled works to finish and prevent
+  * new works from being submitted
+@@ -532,6 +533,7 @@ struct ubi_device {
+ 	void *fm_buf;
+ 	size_t fm_size;
+ 	struct work_struct fm_work;
++	int fm_work_scheduled;
+ 
+ 	/* Wear-leveling sub-system's stuff */
+ 	struct rb_root used;
+diff --git a/drivers/mtd/ubi/wl.c b/drivers/mtd/ubi/wl.c
+index 21d0313..e9b8281 100644
+--- a/drivers/mtd/ubi/wl.c
++++ b/drivers/mtd/ubi/wl.c
+@@ -149,6 +149,9 @@ static void update_fastmap_work_fn(struct work_struct *wrk)
+ {
+ 	struct ubi_device *ubi = container_of(wrk, struct ubi_device, fm_work);
+ 	ubi_update_fastmap(ubi);
++	spin_lock(&ubi->wl_lock);
++	ubi->fm_work_scheduled = 0;
++	spin_unlock(&ubi->wl_lock);
+ }
+ 
+ /**
+@@ -657,7 +660,10 @@ static struct ubi_wl_entry *get_peb_for_wl(struct ubi_device *ubi)
+ 		/* We cannot update the fastmap here because this
+ 		 * function is called in atomic context.
+ 		 * Let's fail here and refill/update it as soon as possible. */
+-		schedule_work(&ubi->fm_work);
++		if (!ubi->fm_work_scheduled) {
++			ubi->fm_work_scheduled = 1;
++			schedule_work(&ubi->fm_work);
++		}
+ 		return NULL;
+ 	} else {
+ 		pnum = pool->pebs[pool->used++];
+-- 
+cgit v1.1
+

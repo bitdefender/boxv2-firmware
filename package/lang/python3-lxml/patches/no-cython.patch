@@ -1,0 +1,16 @@
+--- a/setupinfo.py
++++ b/setupinfo.py
+@@ -3,12 +3,7 @@ from distutils.core import Extension
+ from distutils.errors import DistutilsOptionError
+ from versioninfo import get_base_dir, split_version
+ 
+-try:
+-    from Cython.Distutils import build_ext as build_pyx
+-    import Cython.Compiler.Version
+-    CYTHON_INSTALLED = True
+-except ImportError:
+-    CYTHON_INSTALLED = False
++CYTHON_INSTALLED = False
+ 
+ EXT_MODULES = ["lxml.etree", "lxml.objectify"]
+ 

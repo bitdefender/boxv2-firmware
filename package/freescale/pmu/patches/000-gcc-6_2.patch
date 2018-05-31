@@ -1,0 +1,53 @@
+Index: pmu-4.00.1/pmuboot/pm.c
+===================================================================
+--- pmu-4.00.1.orig/pmuboot/pm.c	2016-03-23 12:45:30.000000000 +0200
++++ pmu-4.00.1/pmuboot/pm.c	2016-11-11 06:31:17.491551726 +0200
+@@ -265,7 +265,7 @@
+ 	/* Resuming Voltages using PMIC */
+ 	writel(((readl(AXI_CLK_CNTRL_1)) | (BIT_5_MSK)), AXI_CLK_CNTRL_1);
+ 	for (i=0 ; i < 4 ; i++);
+-		c2k_aps8803_buck_regl_enable(i);
++	c2k_aps8803_buck_regl_enable(i);
+ 	writel(((readl(AXI_CLK_CNTRL_1)) & (~BIT_5_MSK)), AXI_CLK_CNTRL_1);
+ #endif
+ 
+@@ -385,7 +385,7 @@
+ 	/* Reducing Voltages using PMIC */
+ 	writel(((readl(AXI_CLK_CNTRL_1)) | (BIT_5_MSK)), AXI_CLK_CNTRL_1);	
+ 	for (i=0 ; i < 4 ; i++);
+-		c2k_aps8803_buck_regl_disable(i);
++	c2k_aps8803_buck_regl_disable(i);
+ 	writel(((readl(AXI_CLK_CNTRL_1)) & (~BIT_5_MSK)), AXI_CLK_CNTRL_1);
+ #endif
+ 
+Index: pmu-4.00.1/pmuboot/pmic.c
+===================================================================
+--- pmu-4.00.1.orig/pmuboot/pmic.c	2016-03-23 12:45:30.000000000 +0200
++++ pmu-4.00.1/pmuboot/pmic.c	2016-11-11 06:32:38.983925702 +0200
+@@ -23,22 +23,22 @@
+ 	APS8803_BUCK3_REG,	
+ };
+ 
+-static const int buck_out_reg_addr[] = {
++/*static const int buck_out_reg_addr[] = {
+ 	APS8803_BUCK0_OUT_REG,
+ 	APS8803_BUCK1_OUT_REG,
+ 	APS8803_BUCK2_OUT_REG,	
+ 	APS8803_BUCK3_OUT_REG,	
+-};
++};*/
+ 
+ static const int ldo_reg_addr[] = {
+ 	APS8803_LDO0_REG,
+ 	APS8803_LDO1_REG,
+ };
+ 
+-static const int ldo_out_reg_addr[] = {
++/*static const int ldo_out_reg_addr[] = {
+ 	APS8803_LDO0_OUT_REG,
+ 	APS8803_LDO1_OUT_REG,
+-};
++};*/
+ 
+ unsigned char buck_voltage_reg_original[4];
+ unsigned char buck_voltage_reg_lowered[4] = {0x43, 0x43, 0xcf, 0x92} ;

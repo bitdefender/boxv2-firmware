@@ -1,0 +1,13 @@
+Index: linux-3.19.3/drivers/char/comcerto_otp.c
+===================================================================
+--- linux-3.19.3.orig/drivers/char/comcerto_otp.c
++++ linux-3.19.3/drivers/char/comcerto_otp.c
+@@ -283,7 +283,7 @@ static inline int comcerto_otp_read(loff
+ 
+ 		bit_offset += 8;
+ 
+-	} while (no_bytes--);
++	} while (--no_bytes);
+ 
+ 	/* reading is done make the read_enable low */
+ 	writel(0x0, COMCERTO_OTP_READEN_INPUT);

@@ -1,0 +1,41 @@
+From 5634b6de989d03714ef8c894022c3910095bfc2b Mon Sep 17 00:00:00 2001
+From: Richard Weinberger <richard@nod.at>
+Date: Thu, 16 Jun 2016 23:26:14 +0200
+Subject: mm: Export migrate_page_move_mapping and migrate_page_copy
+
+[ Upstream commit 1118dce773d84f39ebd51a9fe7261f9169cb056e ]
+
+Export these symbols such that UBIFS can implement
+->migratepage.
+
+Cc: stable@vger.kernel.org
+Signed-off-by: Richard Weinberger <richard@nod.at>
+Acked-by: Christoph Hellwig <hch@lst.de>
+Signed-off-by: Sasha Levin <sasha.levin@oracle.com>
+---
+ mm/migrate.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/mm/migrate.c b/mm/migrate.c
+index cd4fd10..3594def 100644
+--- a/mm/migrate.c
++++ b/mm/migrate.c
+@@ -421,6 +421,7 @@ int migrate_page_move_mapping(struct address_space *mapping,
+ 
+ 	return MIGRATEPAGE_SUCCESS;
+ }
++EXPORT_SYMBOL(migrate_page_move_mapping);
+ 
+ /*
+  * The expected number of remaining references is the same as that
+@@ -580,6 +581,7 @@ void migrate_page_copy(struct page *newpage, struct page *page)
+ 	if (PageWriteback(newpage))
+ 		end_page_writeback(newpage);
+ }
++EXPORT_SYMBOL(migrate_page_copy);
+ 
+ /************************************************************
+  *                    Migration functions
+-- 
+cgit v1.1
+

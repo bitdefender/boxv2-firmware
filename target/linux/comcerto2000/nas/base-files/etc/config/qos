@@ -1,0 +1,10 @@
+# change default priority so packets (including TSO) go into TMU queue 0 (which can hold more packets)
+config ifname eth0
+	option priority 0
+
+config ifname eth2
+	option priority 0
+
+config ifname eth3
+	option priority 0
+

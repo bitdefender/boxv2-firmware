@@ -1,0 +1,1702 @@
+#!/bin/sh 
+##################################################################
+
+#. /usr/lib/webif/webif.sh
+. /etc/functions.sh
+uci_load "asterisk"
+uci_load "webif"
+
+##################################################################
+#####                Removing old configuration              #####
+##################################################################
+rm -rf /etc/asterisk/sip.conf
+rm -rf /etc/asterisk/mspd.conf
+rm -rf /etc/asterisk/extensions.conf
+rm -rf /etc/asterisk/voicemail.conf
+
+##################################################################
+#####              Reading allowed codec types               #####
+##################################################################
+config_get bitrate_amr general bitrate_codec_amr
+config_get bitrate_amr_wb general bitrate_codec_amr_wb
+config_get no_of_codecs general no_of_codecs
+codec=""
+#supported codecs in ascending order of preference
+codec_id=1
+while [ $codec_id -le $no_of_codecs ]
+do
+    config_get a codec$codec_id value
+    config_get codec_name codec$codec_id codec_name
+    if [ "$a" = "yes" ]; then
+	if [ "$codec" = "" ]; then
+	    codec=$codec_name
+	else
+	    codec=$codec,$codec_name
+	fi
+    fi
+    codec_id=`expr $codec_id + 1`
+done
+
+##################################################################
+#####             Reading general configuration              #####
+##################################################################
+config_get analogphones general analogphones                      
+config_get fxo general fxo
+config_get dectphones general dectphones
+config_get t1phones general t1phones
+config_get ip general ipaddr_other_ast
+config_get dial_timeout general dial_timeout
+config_get interdigit_timeout general interdigit_timeout
+config_get ntt general ntt
+config_get band general band
+config_get band3wc general 3wc_band
+config_get flash_mode general flash_mode
+config_get rtpcutthru_mode general rtpcutthru_mode
+config_get board general device_name
+config_get board_name general board_name
+config_get legerity_phones general legerity_phones
+config_get proslic_phones general proslic_phones
+config_get fax_mode general fax_mode
+config_get ec_type general echo_cancel_type
+config_get gl_rsp_bwe_master general rsp_bwe_master
+config_get gl_rsp_bwe_high_band general rsp_bwe_high_band
+config_get gl_rsp_bwe_low_band general rsp_bwe_low_band
+
+    config_get dect_pin general dect_pin
+
+if [ "$ntt" = "yes" ]; then
+    var_ntt=1
+else
+    var_ntt=0
+fi
+
+if [ "$flash_mode" != "threeway" ]; then
+    flash_mode=switch
+fi
+
+if [ "$rtpcutthru_mode" = "enable" ]; then
+	rtpcutthru_mode=1
+	sed -i 's/rtpcutthru=no/rtpcutthru=yes/' /etc/asterisk/rtp.conf
+else
+	rtpcutthru_mode=0
+	sed -i 's/rtpcutthru=yes/rtpcutthru=no/' /etc/asterisk/rtp.conf
+fi
+
+if ([ "$board" = "Mindspeed Comcerto 1000" ] || [ "$board_name" = "c2kasic" ] || [ "$board_name" = "c2kmfcnevm" ] || [ "$board_name" = "c2kevm" ]); then
+	if [ "$band3wc" = "wide" ]; then
+		band3wc_cmd="wideband3wc=1"
+	else
+		band3wc_cmd="wideband3wc=0"
+	fi
+fi
+
+case $gl_rsp_bwe_master in
+enable) rsp_bwe_master="1";;
+*) rsp_bwe_master="0";;
+esac
+
+##################################################################
+#####           Setting MAC address in mspd.conf             #####
+##################################################################
+mac=`ifconfig eth1 | grep HWaddr | cut -d ' ' -f 11`
+
+timeslot=0
+timeslot_dect=0
+
+if [ $legerity_phones -gt 0 ] && [ $proslic_phones -eq 0 ] && ([ "$board_name" = "c2kasic" ] || [ "$board_name" = "c2kmfcnevm" ] || [ "$board_name" = "c2kevm" ]); then
+    # Legerity ZSI device doesn't work on timeslot 0 - this is ZSI operation restriction
+    timeslot=1
+fi
+
+shift_timeslot()
+{
+    type_=$1
+    band_=$2
+        
+    #DECT timeslots are another interface, than TDM and initial timeslot is 0.
+    #DECT supports only WB channels, so in both wide and narrow system bands,
+    #the DECT timeslot in increasing by 4.
+    
+    if [ $type_ = "analog" ]; then
+        if [ "$band_" = "narrow" ]; then
+            timeslot=`expr $timeslot + 1` 
+        elif [ "$band_" = "wide" ]; then			
+            timeslot=`expr $timeslot + 2`
+        fi
+    elif [ $type_ = "dect" ]; then
+        timeslot_dect=`expr $timeslot_dect + 4`
+    fi
+}
+
+##################################################################
+#####              Wideband codec settings                   #####
+##################################################################
+echo "[general]" > /usr/local/etc/dspg_dect.conf
+if [ "$band" = "narrow" ]; then
+   band_cmd="wideband=0"
+elif [ "$band" = "wide" ]; then
+   band_cmd="wideband=1"
+fi
+echo "$band_cmd" >> /usr/local/etc/dspg_dect.conf
+
+##################################################################
+#####             Unified diagnostic settings                #####
+##################################################################
+config_get dst_ipaddr ud dst_ipaddr
+config_get sport ud sport
+config_get dport ud dport
+config_get all ud all
+    [ -n "$all" ] || all="0"
+config_get tdm_tx ud tdm_tx
+    [ -n "$tdm_tx" ] || tdm_tx="0"
+config_get tdm_rx ud tdm_rx
+    [ -n "$tdm_rx" ] || tdm_rx="0"
+config_get spu_iopram ud spu_iopram
+    [ -n "$spu_iopram" ] || spu_iopram="0"
+config_get spu_in ud spu_in
+    [ -n "$spu_in" ] || spu_in="0"
+config_get spu_out ud spu_out
+    [ -n "$spu_out" ] || spu_out="0"
+config_get packet_tx ud packet_tx
+    [ -n "$packet_tx" ] || packet_tx="0"
+config_get packet_rx ud packet_rx
+    [ -n "$packet_rx" ] || packet_rx="0"
+config_get ud_report ud ud_report
+    [ -n "$ud_report" ] || ud_report="0"
+
+##################################################################
+#####          External SIP Proxy server settings            #####
+##################################################################
+#qualify_cmd="qualify=15"
+config_get enable_proxy extproxy enable_proxy
+if [ "$enable_proxy" ]; then
+    #qualify_cmd=";qualify=15"
+    config_get login_name extproxy login_name
+    config_get ext_pxy_pwd extproxy ext_pxy_pwd
+    config_get addr_type extproxy addr_type
+    config_get patternphno extproxy patternphno
+    if [ "$addr_type" = "ipaddress" ] ; then
+        config_get address extproxy ipaddress
+    else 
+        config_get address extproxy domainname
+    fi
+    
+    if  [ -z "$login_name" ] || [ -z "$ext_pxy_pwd" ] || [ -z "$address" ] ; then
+        register_cmd=
+        auth_cmd=
+    else
+        register_cmd="register => $login_name:$ext_pxy_pwd@$address"
+        config_get auth extproxy sip_auth
+        if [ "$auth" = "enable" ] ; then
+            auth_cmd="[authentication]
+            auth => $login_name:$ext_pxy_pwd@$address"
+        elif [ "$auth" = "disable" ] ; then
+            auth_cmd="insecure=invite"
+        fi
+    fi
+
+    if  [ -z "$patternphno" ] || [ -z "$address" ] ; then
+        extpxyinc_cmd=
+        extpxycntx_cmd=
+    else
+        extpxyinc_cmd="include => external-proxy"
+        extpxycntx_cmd="[external-proxy]
+        exten => $patternphno,1,Macro(stdinterasterisk,SIP/\${EXTEN}@$address,,)"
+    fi
+fi
+
+##################################################################
+#####                    Creating sip.conf                   #####
+##################################################################
+#$qualify_cmd
+echo ";
+;DO NOT MODIFY, FILE AUTOMATICALLY GENERATED BY SCRIPT "configure_asterisk"
+;
+
+[general]
+context=default                 ; Default context for incoming calls
+bindport=5060                   ; UDP Port to bind to (SIP standard port is 5060)
+bindaddr=0.0.0.0                ; IP address to bind to (0.0.0.0 binds to all)
+srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
+pedantic=no
+disallow=all
+allow=$codec                	;also defines preference
+dtmfmode=auto" >> /etc/asterisk/sip.conf
+
+if [ "$fax_mode" != "passthru" ]; then
+    echo "t38pt_udptl=yes,redundancy" >> /etc/asterisk/sip.conf #use redundancy, with FEC buffer overflow might happen
+fi
+
+echo "$register_cmd
+$auth_cmd
+
+;A.B.C.D is IP-Address of other board
+;replace A.B.C.D and reload configuration files
+
+" >> /etc/asterisk/sip.conf
+
+##################################################################
+#####                 Creating mspd.conf                     #####
+##################################################################
+echo \
+";
+;! DO NOT MODIFY! THE FILE IS AUTOMATICALLY GENERATED BY \"/lib/asterisk/configure_asterisk\" SCRIPT
+;
+
+[global]
+context=default                     ;context for calls originating from this channel module
+callgroups=1                        ;put calls to MSPD-channels into these groups
+pickupgroups=1                      ;MSPD-channels can pickup calls in these groups
+ipaddr=169.254.0.1                  ;CSP eth1 IP-address
+disallow=all
+allow=$codec                        ;also defines preference
+bitrate_amr=$bitrate_amr
+bitrate_amr_wb=$bitrate_amr_wb
+dial_timeout=$dial_timeout                 ; msec minimum and default value 8000 msec
+interdigit_timeout=$interdigit_timeout     ; msec minimum and default value 1300 msec
+ntt_callerid=$var_ntt
+ec_type=$ec_type
+fax_mode=$fax_mode
+flash_mode=$flash_mode
+rtpcutthru_mode=$rtpcutthru_mode
+$band3wc_cmd
+$band_cmd
+rsp_bwe_master=$rsp_bwe_master
+rsp_bwe_high_band=$gl_rsp_bwe_high_band
+rsp_bwe_low_band=$gl_rsp_bwe_low_band" >> /etc/asterisk/mspd.conf
+
+echo "dect_pin=$dect_pin" >> /etc/asterisk/mspd.conf
+
+echo \
+"
+[device]
+name=msp
+srcmac=$mac            ; MSP(ETH0) Mac Address (Do not modify)
+dstmac=00:AA:BB:CC:DD:EE            ; ETH1 Mac Address (Do not modify)
+ipaddr=169.254.0.2                  ; MSP IP-address that will be used (Must be in the same network as ipaddr paarmeter)
+
+tdm_tx_order=1
+tdm_rx_polarity=0
+tdm_tx_polarity=0
+tdm_rx_clock_mode=0
+tdm_tx_clock_mode=0
+tdm_rx_clock_edge=0
+tdm_tx_clock_edge=1
+tdm_frame_edge=1
+tdm_number_of_ts=32
+tdm_inverted_frame_signal=0
+tdm_bit_order_rcv=1
+num_tdm_clk_cycles_delay_tx=0
+num_tdm_clk_cycles_delay_rx=0
+
+[tdmbus]
+name=SLIC                           ;name of this TDM-bus
+device=msp                          ;device of this TDM-bus
+bus-id=0x0200                       ;STI type/index of this bus (0x0200 == slic0)
+lines=`expr $analogphones + $fxo`                             ;number of pots lines to operate with
+istrunk=0                           ;not trunk -> can only be called via phone
+" >> /etc/asterisk/mspd.conf
+
+if [ "$dectphones" -gt "0" ];then
+echo \
+"[tdmbus]
+name=dect                           ;name of this TDM-bus
+device=msp                          ;device of this TDM-bus
+bus-id=0x0300                       ;STI type/index of this bus (0x0300 == dect)
+lines=$dectphones                             ;number of lines (timeslots 0..n-1)
+istrunk=0                           ;not trunk -> can only be called via phone"  >> /etc/asterisk/mspd.conf
+fi
+
+if [ "$t1phones" -gt "0" ];then
+echo "
+[tdmbus]
+name=PRI                           ;name of this TDM-bus
+device=msp                          ;device of this TDM-bus
+bus-id=0x0100                       ;STI type/index of this bus (0x0100 == pri)
+lines=$t1phones                             ;number of lines (timeslots 0..n-1)
+istrunk=0                           ;not trunk -> can only be called via phone" >> /etc/asterisk/mspd.conf
+fi
+
+##################################################################
+
+[ -n "$dst_ipaddr" ] && {
+echo "
+[ud_info]
+ud_enable=1
+ud_dest_ip_addr=$dst_ipaddr
+ud_src_port=$sport
+ud_dest_port=$dport
+ud_tdm_tx=$tdm_tx
+ud_tdm_rx=$tdm_rx
+ud_spu_io_params=$spu_iopram
+ud_spu_instream=$spu_in
+ud_spu_outstream=$spu_out
+ud_pkt_tx=$packet_tx
+ud_pkt_rx=$packet_rx
+ud_report_cmd=$ud_report
+" >> /etc/asterisk/mspd.conf
+}
+
+##################################################################
+#####               Creating extensions.conf                 #####
+##################################################################
+echo ";
+;DO NOT MODIFY, FILE AUTOMATICALLY GENERATED BY SCRIPT "configure_asterisk"
+;
+
+[general]
+static=yes
+writeprotect=no
+
+[default]
+include => phones
+include => parkedcalls
+include => conference
+$extpxyinc_cmd
+
+[phones] 
+" >> /etc/asterisk/extensions.conf
+echo "exten => _9X.,1,Macro(stdexten,MSPD_FXO/\${EXTEN:1},,104)
+
+;connecting to other network which has 1XX numbers thru SIP protocol
+;A.B.C.D is IP-Address of other board
+;replace A.B.C.D and reload configuration files
+;exten => _4xx,1,Macro(stdexten,SIP/\${EXTEN}@$ip,,401)
+;connecting to other network which has 2XX numbers thru SIP protocol
+;exten => _5xx,1,Macro(stdexten,SIP/\${EXTEN}@$ip,,401) 
+" >> /etc/asterisk/extensions.conf
+
+##################################################################
+######                 Creating voicemail.conf               #####
+##################################################################
+config_get global_voicemail general voicemail
+if [ "$global_voicemail" = "enable" ] ; then
+  voicemail=yes
+else
+  voicemail=no
+fi
+config_get vm_operator general vm_operator
+if [ -n "$vm_operator" ] ; then
+  vm_operator=yes
+else
+  vm_operator=no
+fi
+
+echo "
+;
+;DO NOT MODIFY, FILE AUTOMATICALLY GENERATED BY SCRIPT "configure_asterisk"
+;
+
+[general]
+review=yes
+format=gsm
+serveremail=asterisk
+attach=yes
+skipms=3000
+maxsilence=10
+maxlogins=3
+silencethreshold=128
+emaildateformat=%A, %B %d, %Y at %r
+sendvoicemail=$voicemail  
+operator=$vm_operator
+
+[default]
+" >> /etc/asterisk/voicemail.conf 
+
+if [ "$ec_type" = "EC" ] ; then
+##################################################################
+#####              Echo Cancellation settings                #####
+##################################################################
+	config_get field_global_ec_enable general field_ec_enable
+	config_get field_global_dc_filter_enable general field_dc_filter_enable
+	config_get field_global_hec_filter_enable general field_hec_filter_enable
+	config_get field_global_nlp_control_enable general field_nlp_control_enable
+	config_get field_global_nlp_tune general field_nlp_tune
+	config_get field_global_comfort_noise general field_comfort_noise
+	config_get field_global_ec_tail general field_ec_tail
+
+	bit13=0
+	bit12=1
+	bit09=0
+	bit08=0
+	bit05=0
+
+	if [ "$field_global_ec_enable" ] ; then
+    	    bit15=1
+        else
+	    bit15=0
+        fi
+
+	if [ "$field_global_dc_filter_enable" ] ; then
+    	    bit14=0
+        else
+	    bit14=1
+	fi
+
+	if [ "$field_global_hec_filter_enable" ] ; then
+    	    bit11=1
+	else
+    	    bit11=0
+	fi
+
+	if [ "$field_global_nlp_control_enable" ] ; then
+    	    bit10=0
+	else
+    	    bit10=1
+	fi
+
+	if [ "$field_global_comfort_noise" ] ; then
+    	    bit06=0
+	else
+    	    bit06=1
+	fi
+
+	case "$field_global_nlp_tune" in
+	00) bit07=0
+    	    bit04=0;;
+	01) bit07=0
+    	    bit04=1;;
+	10) bit07=1
+    	    bit04=0;;
+	esac
+            
+	a=$bit15$bit14$bit13$bit12
+	b=$bit11$bit10$bit09$bit08
+	c=$bit07$bit06$bit05$bit04
+	d=$field_global_ec_tail
+
+	global_output="0x"
+
+	for i in $a $b $c $d
+	do
+    	    case "$i" in
+    	    0000) out=0;;
+    	    0001) out=1;;
+    	    0010) out=2;;
+    	    0011) out=3;;
+    	    0100) out=4;;
+    	    0101) out=5;;
+    	    0110) out=6;;
+    	    0111) out=7;;
+    	    1000) out=8;;
+    	    1001) out=9;;
+    	    1010) out=A;;
+    	    1011) out=B;;
+    	    1100) out=C;;
+    	    1101) out=D;;
+    	    1110) out=E;;
+    	    1111) out=F;;
+    	    esac
+
+    	    global_output=$global_output$out
+	done ### for i in $a $b $c $d
+
+##################################################################
+#####          Enhanced Echo Cancellation settings           #####
+##################################################################
+	config_get field_global_full_filter general field_full_filter
+	config_get field_global_fast_convergence_control general field_fast_convergence_control
+
+	if [ "$field_global_full_filter" ] ; then
+    	    bit15=1
+	else
+    	    bit15=0
+	fi
+
+	if [ "$field_global_fast_convergence_control" ] ; then
+    	    bit12=1
+	else
+    	    bit12=0
+	fi
+
+	temp=$bit15\00$bit12
+        
+	case "$temp" in
+	0000) out=0;;
+	0001) out=1;;
+	1000) out=8;;
+	1001) out=9;;
+	esac
+
+	global_en_echocan=0x$out\000
+
+else ### if [ "$ec_type" = "EC" ]
+##################################################################
+#####        Dual Filter Echo Cancellation settings          #####
+##################################################################
+    config_get dfec_master_echo_canceller_enable general field_dfec_master_echo_canceller_enable
+    config_get dfec_transmit_input_dc_filter_disable general field_dfec_transmit_input_dc_filter_disable
+    config_get dfec_tone_transmitter general field_dfec_tone_transmitter
+    config_get dfec_init_control_enable general field_dfec_init_control_enable
+    config_get dfec_filter_coefficient_freeze general field_dfec_filter_coefficient_freeze
+    config_get dfec_nlp_control_enable general field_dfec_nlp_control_enable
+    config_get dfec_dynamic_attenuation general field_dfec_dynamic_attenuation
+    config_get dfec_background_noise_replacement general field_dfec_background_noise_replacement
+    config_get dfec_sparse_foreground_filter general field_dfec_sparse_foreground_filter
+    config_get dfec_nlp_comfort_noise_generation general field_dfec_nlp_comfort_noise_generation
+    config_get dfec_echo_path_filter_control general field_dfec_echo_path_filter_control
+    config_get dfec_recieve_input_dc_filter_enable general field_dfec_recieve_input_dc_filter_enable
+    config_get dfec_tail general field_dfec_tail
+
+
+    if [ "$dfec_master_echo_canceller_enable" ] ; then
+      bit15=1
+    else
+      bit15=0
+    fi
+    
+    if [ "$dfec_transmit_input_dc_filter_disable" ] ; then
+      bit14=0
+    else
+      bit14=1
+    fi
+    
+    if [ "$dfec_tone_transmitter" ] ; then
+      bit13=1
+    else
+      bit13=0
+    fi
+    
+    if [ "$dfec_init_control_enable" ] ; then
+      bit12=1
+    else
+      bit12=0
+    fi
+    
+    if [ "$dfec_filter_coefficient_freeze" ] ; then
+      bit11=0
+    else
+      bit11=1
+    fi
+    
+    if [ "$dfec_nlp_control_enable" ] ; then
+      bit10=0
+    else
+      bit10=1
+    fi
+    
+    if [ "$dfec_dynamic_attenuation" ] ; then
+      bit09=1
+    else
+      bit09=0
+    fi
+    
+    if [ "$dfec_background_noise_replacement" ] ; then
+      bit08=1
+    else
+      bit08=0
+    fi
+    
+    if [ "$dfec_sparse_foreground_filter" ] ; then
+      bit07=1
+    else
+      bit07=0
+    fi
+    
+    if [ "$dfec_nlp_comfort_noise_generation" ] ; then
+      bit06=0
+    else
+      bit06=1
+    fi
+    
+    if [ "$dfec_echo_path_filter_control" ] ; then
+      bit05=0
+    else
+      bit05=1
+    fi
+    
+    if [ "$dfec_recieve_input_dc_filter_enable" ] ; then
+      bit04=1
+    else
+      bit04=0
+    fi
+    
+    a=$bit15$bit14$bit13$bit12
+    b=$bit11$bit10$bit09$bit08
+    c=$bit07$bit06$bit05$bit04
+    
+    global_dfecoutput="0x"
+    for i in $a $b $c $dfec_tail
+    do
+        case "$i" in
+        0000) out=0;;
+        0001) out=1;;
+        0010) out=2;;
+        0011) out=3;;
+        0100) out=4;;
+        0101) out=5;;
+        0110) out=6;;
+        0111) out=7;;
+        1000) out=8;;
+        1001) out=9;;
+        1010) out=A;;
+        1011) out=B;;
+        1100) out=C;;
+        1101) out=D;;
+        1110) out=E;;
+        1111) out=F;;
+        esac
+
+        global_dfecoutput=$global_dfecoutput$out
+    done ### for i in $a $b $c $d
+
+fi ### if [ "$ec_type" = "EC" ]
+##################################################################
+#####       Dual Filter Echo Cancellation Tune settings      #####
+##################################################################
+echo "
+[echocan_settings]" >> /etc/asterisk/mspd.conf
+if [ "$ec_type" = "EC" ]; then
+echo "echocan=$global_output
+enh_echocan=$global_en_echocan" >> /etc/asterisk/mspd.conf
+else
+echo "dualfilterechocan=$global_dfecoutput
+dfec_tune_config=Default
+dfec_tx_in_scf_frc=0
+dfec_tx_in_scf_int=1
+dfec_tx_flt_coef=8192
+dfec_tx_det_thr_le=323
+dfec_tx_out_scf_frc=0
+dfec_tx_out_scf_int=1
+dfec_rx_in_scf_frc=0
+dfec_rx_in_scf_int=1
+dfec_rx_flt_coef=8192
+dfec_rx_det_thr=363
+dfec_rx_out_scf_frc=0
+dfec_rx_out_scf_int=1
+dfec_minerl=20675
+dfec_db_hng_reset=80
+dfec_db_adj=-20675
+dfec_nl_hng=400
+dfec_nl_hng_se=1600
+dfec_nl_inc=80
+dfec_nl_inc_se=320
+dfec_flt_res_sme_nl=184
+dfec_flt_cng_sme_nl=16384
+dfec_tx_out_thr_dbt_nl=1463
+dfec_tx_out_thr_min_nl=1463
+dfec_tx_out_pscf_nl=-4096
+dfec_tx_c3_nl=24576
+dfec_tx_c4_nl=8192
+dfec_tx_nos_scf_nl=1843
+dfec_tx_scf_max_nl=3677
+dfec_tx_out_pwr_adj_nl=-32767
+dfec_tx_out_thr_del_nl=3
+dfec_tx_nlp_off_inc=82
+dfec_flt_chk_rst1=160
+dfec_flt_rin_min=407
+dfec_flt_thr1=261
+dfec_flt_scf1=-32767
+dfec_flt_scf2=-16384
+dfec_flt_epc3=6538
+dfec_flt_scf3=-16384
+dfec_flt_thr4=1843
+dfec_flt_thr2=1638
+dfec_flt_cnt3=3
+dfec_flt_scf4=-26029
+dfec_flt_scf5=-11626
+dfec_flt_nos_scf_min=8192
+dfec_dat_rx_scf_min_st=16384
+dfec_dat_rese_lev=130
+dfec_dat_rese_dt_lev=130
+dfec_dat_rx_lev=2043
+dfec_dat_tx_lev=324
+dfec_tx_det_thr_se=115
+dfec_tx_out_thr_min_nl2=1463
+dfec_tx_out_min_tx_nl2=16384
+dfec_tx_out_inc_nl2=2400
+dfec_tx_out_cnt_rst_nl2=4800
+dfec_dat_rx_mxl=20433
+dfec_flt_rxm_sme_nl=9116
+dfec_dat_rx_scf_min_dt=16384
+dfec_tx_acom_nl=0
+dfec_tx_rlim_nl=0
+dfec_max_noise=13312 ">> /etc/asterisk/mspd.conf
+fi ### if [ "$ec_type" = "EC" ]
+
+config_get field_dsp_acp general dsp_acp
+config_get field_vad general vad
+config_get field_ud general ud
+config_get field_bwe_master general bwe_master
+config_get field_bwe_high_band general bwe_high_band
+config_get field_bwe_low_band general bwe_low_band
+
+case $field_dsp_acp in
+enable) dsp_acp="1";;
+*) dsp_acp="0";;
+esac
+
+case $field_vad in
+enable) vad="1";;
+*) vad="0";;
+esac
+
+case $field_bwe_master in
+enable) bwe_master="1";;
+*) bwe_master="0";;
+esac
+
+echo \
+"
+[phone_settings]
+#Note these settings apply to _all_ phones, unless superceded by individual phone settings
+disallow=all
+allow=$codec
+dsp_acp=$dsp_acp
+vad=$vad
+ud_enable=$all
+bwe_master=$bwe_master
+bwe_high_band=$field_bwe_high_band
+bwe_low_band=$field_bwe_low_band" >> /etc/asterisk/mspd.conf
+
+configure_phones()
+{
+    type=$1
+    tdmbus=$2
+    phone=1
+    config_get phone_num general "$type"phones
+
+    while [ "$phone" -le "$phone_num" ]
+    do
+	config_get name $type$phone name
+	config_get number $type$phone number
+	config_get ext_voicemail $type$phone voicemail
+	config_get ext_field_dsp_acp $type$phone field_dsp_acp
+	config_get ext_field_vad $type$phone field_vad
+	config_get ext_bwe_master $type$phone bwe_master
+	config_get ext_phone_band $type$phone phone_band
+	config_get ext_bwe_high_band $type$phone bwe_high_band
+	config_get ext_bwe_low_band $type$phone bwe_low_band
+   
+	case $ext_field_dsp_acp in
+        default) ext_dsp_acp=$dsp_acp;;
+	enable) ext_dsp_acp="1";;
+	disable) ext_dsp_acp="0";;
+	esac
+        
+	case $ext_field_vad in
+        default) ext_vad=$vad;;
+	enable) ext_vad="1";;
+	disable) ext_vad="0";;
+	esac
+
+	case $ext_bwe_master in
+	enable) bwe_master="1";;
+	*) bwe_master="0";;
+	esac
+
+	case $ext_phone_band in
+	wide) phone_band="1";;
+	narrow) phone_band="0";;
+	*) phone_band="0";;
+	esac
+
+	config_get ud_enable ud phone$phone
+	[ -n "$ud_enable" ] || ud_enable="0"
+
+##################################################################
+#####              Echo Cancellation settings                #####
+##################################################################
+	config_get field_ec_enable $type$phone field_ec_enable
+	config_get field_dc_filter_enable $type$phone field_dc_filter_enable
+	config_get field_hec_filter_enable $type$phone field_hec_filter_enable
+	config_get field_nlp_control_enable $type$phone field_nlp_control_enable
+	config_get field_nlp_tune $type$phone field_nlp_tune
+	config_get field_comfort_noise $type$phone field_comfort_noise
+	config_get field_ec_tail $type$phone field_ec_tail
+
+        if [ "$field_ec_tail" = "default" ]; then
+            field_ec_tail=$field_global_ec_tail
+        fi
+
+	bit13=0
+	bit12=1
+	bit09=0
+	bit08=0
+	bit05=0
+
+        case $field_ec_enable in
+        default) if [ $field_global_ec_enable ] ; then
+                    bit15=1
+                 else
+                    bit15=0
+                 fi;;
+        enable) bit15=1;;
+        disable) bit15=0;;
+        esac         
+
+        case $field_dc_filter_enable in
+        default) if [ $field_global_dc_filter_enable ]; then
+                    bit14=0
+                 else
+                    bit14=1
+                 fi;;
+        enable) bit14=0;;
+        disable) bit14=1;;
+        esac         
+
+        case $field_hec_filter_enable in
+        default) if [ $field_global_hec_filter_enable ]; then
+                    bit11=1
+                 else
+                    bit11=0
+                 fi;;
+        enable) bit14=1;;
+        disable) bit14=0;;
+        esac         
+
+        case $field_nlp_control_enable in
+        default) if [ $field_global_nlp_control_enable ]; then
+                    bit10=0
+                 else
+                    bit10=1
+                 fi;;
+        enable) bit14=0;;
+        disable) bit14=1;;
+        esac         
+
+        case $field_comfort_noise in
+        default) if [ $field_global_comfort_noise ]; then
+                    bit06=0
+                 else
+                    bit06=1
+                 fi;;
+        enable) bit06=0;;
+        disable) bit06=1;;
+        esac         
+
+        if [ "$field_nlp_tune" = "default" ]; then
+            field_nlp_tune=$field_global_nlp_tune
+        fi
+	case "$field_nlp_tune" in
+	00) bit07=0
+    	    bit04=0;;
+	01) bit07=0
+    	    bit04=1;;
+	10) bit07=1
+    	    bit04=0;;
+	esac
+            
+	a=$bit15$bit14$bit13$bit12
+	b=$bit11$bit10$bit09$bit08
+	c=$bit07$bit06$bit05$bit04
+	d=$field_ec_tail
+
+	output="0x"
+
+	for i in $a $b $c $d
+	do
+    	    case "$i" in
+    	    0000) out=0;;
+    	    0001) out=1;;
+    	    0010) out=2;;
+    	    0011) out=3;;
+    	    0100) out=4;;
+    	    0101) out=5;;
+    	    0110) out=6;;
+    	    0111) out=7;;
+    	    1000) out=8;;
+    	    1001) out=9;;
+    	    1010) out=A;;
+    	    1011) out=B;;
+    	    1100) out=C;;
+    	    1101) out=D;;
+    	    1110) out=E;;
+    	    1111) out=F;;
+    	    esac
+
+    	    output=$output$out
+	done ### for i in $a $b $c $d
+
+##################################################################
+#####          Enhanced Echo Cancellation settings           #####
+##################################################################
+	config_get field_full_filter $type$phone field_full_filter
+	config_get field_fast_convergence_control $type$phone field_fast_convergence_control
+
+        case $field_full_filter in
+        default) if [ $field_global_full_filter ]; then
+                    bit15=1
+                 else
+                    bit15=0
+                 fi;;
+        enable) bit15=1;;
+        disable) bit15=0;;
+        esac         
+
+        case $field_fast_convergence_control in
+        default) if [ $field_global_fast_convergence_control ]; then
+                    bit12=1
+                 else
+                    bit12=0
+                 fi;;
+        enable) bit12=1;;
+        disable) bit12=0;;
+        esac         
+
+	temp=$bit15\00$bit12
+        
+	case "$temp" in
+	0000) out=0;;
+	0001) out=1;;
+	1000) out=8;;
+	1001) out=9;;
+	esac
+
+	en_echocan=0x$out\000
+
+##################################################################
+#####        Dual Filter Echo Cancellation settings          #####
+##################################################################
+    config_get ext_dfec_master_echo_canceller_enable analog$phone field_dfec_master_echo_canceller_enable
+    config_get ext_dfec_transmit_input_dc_filter_disable analog$phone field_dfec_transmit_input_dc_filter_disable
+    config_get ext_dfec_tone_transmitter analog$phone field_dfec_tone_transmitter
+    config_get ext_dfec_init_control_enable analog$phone field_dfec_init_control_enable
+    config_get ext_dfec_filter_coefficient_freeze analog$phone field_dfec_filter_coefficient_freeze
+    config_get ext_dfec_nlp_control_enable analog$phone field_dfec_nlp_control_enable
+    config_get ext_dfec_dynamic_attenuation analog$phone field_dfec_dynamic_attenuation
+    config_get ext_dfec_background_noise_replacement analog$phone field_dfec_background_noise_replacement
+    config_get ext_dfec_sparse_foreground_filter analog$phone field_dfec_sparse_foreground_filter
+    config_get ext_dfec_nlp_comfort_noise_generation analog$phone field_dfec_nlp_comfort_noise_generation
+    config_get ext_dfec_echo_path_filter_control analog$phone field_dfec_echo_path_filter_control
+    config_get ext_dfec_recieve_input_dc_filter_enable analog$phone field_dfec_recieve_input_dc_filter_enable
+    config_get ext_dfec_tail analog$phone field_dfec_tail
+
+    case "$ext_dfec_master_echo_canceller_enable" in
+    default) if [ $dfec_master_echo_canceller_enable ]; then
+                bit15=1
+             else
+                bit15=0
+             fi;;
+    enable)  bit15=1;;
+    disable) bit15=0;;
+    esac
+
+    
+    case "$ext_dfec_transmit_input_dc_filter_disable" in
+    default) if [ $dfec_transmit_input_dc_filter_disable ]; then
+                bit14=0
+             else
+                bit14=1
+             fi;;
+    enable)  bit14=0;;
+    disable) bit14=1;;
+    esac
+    
+    case "$ext_dfec_tone_transmitter" in
+    default) if [ $dfec_tone_transmitter ]; then
+                bit13=1
+             else
+                bit13=0
+             fi;;
+    enable)  bit13=1;;
+    disable) bit13=0;;
+    esac
+    
+    case "$ext_dfec_init_control_enable" in
+    default) if [ $dfec_init_control_enable ]; then
+                bit12=1
+             else
+                bit12=0
+             fi;;
+    enable)  bit12=1;;
+    disable) bit12=0;;
+    esac
+    
+    case "$ext_dfec_filter_coefficient_freeze" in
+    default) if [ $dfec_filter_coefficient_freeze ]; then
+                bit11=0
+             else
+                bit11=1
+             fi;;
+    enable)  bit11=0;;
+    disable) bit11=1;;
+    esac
+    
+    case "$ext_dfec_nlp_control_enable" in
+    default) if [ $dfec_nlp_control_enable ]; then
+                bit10=0
+             else
+                bit10=1
+             fi;;
+    enable)  bit10=0;;
+    disable) bit10=1;;
+    esac
+    
+    case "$ext_dfec_dynamic_attenuation" in
+    default) if [ $dfec_dynamic_attenuation ]; then
+                bit09=1
+             else
+                bit09=0
+             fi;;
+    enable)  bit09=1;;
+    disable) bit09=0;;
+    esac
+    
+    case "$ext_dfec_background_noise_replacement" in
+    default) if [ $dfec_background_noise_replacement ]; then
+                bit08=1
+             else
+                bit08=0
+             fi;;
+    enable)  bit08=1;;
+    disable) bit08=0;;
+    esac
+    
+    case "$ext_dfec_sparse_foreground_filter" in
+    default) if [ $dfec_sparse_foreground_filter ]; then
+                bit07=1
+             else
+                bit07=0
+             fi;;
+    enable)  bit07=1;;
+    disable) bit07=0;;
+    esac
+    
+    case "$ext_dfec_nlp_comfort_noise_generation" in
+    default) if [ $dfec_nlp_comfort_noise_generation ]; then
+                bit06=0
+             else
+                bit06=1
+             fi;;
+    enable)  bit06=0;;
+    disable) bit06=1;;
+    esac
+    
+    case "$ext_dfec_echo_path_filter_control" in
+    default) if [ $dfec_echo_path_filter_control ]; then
+                bit05=0
+             else
+                bit05=1
+             fi;;
+    enable)  bit05=0;;
+    disable) bit05=1;;
+    esac
+    
+    case "$ext_dfec_recieve_input_dc_filter_enable" in
+    default) if [ $dfec_recieve_input_dc_filter_enable ]; then
+                bit04=1
+             else
+                bit04=0
+             fi;;
+    enable)  bit04=1;;
+    disable) bit04=0;;
+    esac
+    
+    if [ "$ext_dfec_tail" = "default" ]; then
+        ext_dfec_tail=$dfec_tail
+    fi
+
+    a=$bit15$bit14$bit13$bit12
+    b=$bit11$bit10$bit09$bit08
+    c=$bit07$bit06$bit05$bit04
+    
+    dfecoutput="0x"
+    for i in $a $b $c $ext_dfec_tail
+    do
+        case "$i" in
+        0000) out=0;;
+        0001) out=1;;
+        0010) out=2;;
+        0011) out=3;;
+        0100) out=4;;
+        0101) out=5;;
+        0110) out=6;;
+        0111) out=7;;
+        1000) out=8;;
+        1001) out=9;;
+        1010) out=A;;
+        1011) out=B;;
+        1100) out=C;;
+        1101) out=D;;
+        1110) out=E;;
+        1111) out=F;;
+        esac
+
+        dfecoutput=$dfecoutput$out
+    done ### for i in $a $b $c $d
+
+##################################################################
+#####               Completing configurations                #####
+##################################################################
+echo "
+[phone]
+name=$type`expr $phone - 1` ">> /etc/asterisk/mspd.conf
+#[ -n "$codec" ] && echo "allow=$codec ">> /etc/asterisk/mspd.conf
+[ -n "$tdmbus" ] && echo "tdmbus=$tdmbus ">> /etc/asterisk/mspd.conf
+if [ $type = "dect" ]; then
+    [ -n "$timeslot_dect" ] && echo "timeslot=$timeslot_dect ">> /etc/asterisk/mspd.conf
+elif [ "$type" = "analog" ]; then
+    [ -n "$timeslot" ] && echo "timeslot=$timeslot ">> /etc/asterisk/mspd.conf
+fi
+[ -n "$name <$number>" ] && echo "callerid=$name <$number> ">> /etc/asterisk/mspd.conf
+echo "ud_enable=$ud_enable ">> /etc/asterisk/mspd.conf
+[ "$ec_type" = "EC" ] && {
+[ -n "$output" ] && [ "$global_output" != "$output" ] && echo "echocan=$output ">> /etc/asterisk/mspd.conf
+[ -n "$en_echocan" ] && [ "$global_en_echocan" != "$en_echocan" ] && echo "enh_echocan=$en_echocan ">> /etc/asterisk/mspd.conf
+}
+[ "$ec_type" = "DFEC" ] && {
+[ -n "$dfecoutput" ] && [ "$global_dfecoutput" != "$dfecoutput" ]  && echo "dualfilterechocan=$dfecoutput ">> /etc/asterisk/mspd.conf
+[ -n "$dfec_tune_config" ] && echo "dfec_tune_config=$dfec_tune_config ">> /etc/asterisk/mspd.conf
+}
+[ "$ext_field_dsp_acp" != "default" ] && echo "dsp_acp=$ext_dsp_acp ">> /etc/asterisk/mspd.conf
+[ "$ext_field_vad" != "default" ] && echo "vad=$ext_vad ">> /etc/asterisk/mspd.conf
+
+[ "$ext_bwe_master" != "default" ] && echo "bwe_master=$bwe_master ">> /etc/asterisk/mspd.conf
+[ "$ext_bwe_high_band" != "default" ] && echo "bwe_high_band=$ext_bwe_high_band ">> /etc/asterisk/mspd.conf
+[ "$ext_bwe_low_band" != "default" ] && echo "bwe_low_band=$ext_bwe_low_band ">> /etc/asterisk/mspd.conf
+
+    if [ $type = "dect" ]; then
+        echo "" >> /usr/local/etc/dspg_dect.conf 
+        echo "[handset]" >> /usr/local/etc/dspg_dect.conf 
+        echo "id=$phone" >> /usr/local/etc/dspg_dect.conf 
+        echo "timeslot=$timeslot_dect" >> /usr/local/etc/dspg_dect.conf 
+        timeslot_dect=`expr $timeslot_dect + 4`
+    elif [ "$type" = "analog" ]; then
+        [ "$ext_phone_band" != "default" ] && echo "phone_band=$phone_band ">> /etc/asterisk/mspd.conf
+        timeslot=`expr $timeslot + 2`
+    fi
+
+#this function should be used later insted of explicit
+#timeslot shifting used above to support as much devices in mixed NB/WB mode
+#as possible
+#shift_timeslot $type $band
+
+##################################################################
+#####Dial Plan Configuration
+#####Adding POTS Phone Dial Plan in extensions.conf
+    echo "exten => $number,1,Macro(stdexten,MSPD/$type`expr $phone - 1`,,$number)" >> /etc/asterisk/extensions.conf
+
+##################################################################
+#####Voicemail Configuration
+#####Creating voicemail.conf
+    if [ "$ext_voicemail" = "default" ]; then
+        ext_voicemail=$global_voicemail
+    fi
+    [ "$ext_voicemail" == "enable" ] && echo "$number => $number,$number,root@localhost" >> /etc/asterisk/voicemail.conf
+
+    phone=`expr $phone + 1`
+done ### while [ "$phone" -le "$phone_num" ]
+}
+
+configure_phones analog SLIC
+configure_phones dect dect
+
+
+
+##################################################################
+#####                    FXO Configuration                   #####
+##################################################################
+[ "$fxo" -gt "0" ] && {
+config_get name fxo name
+config_get number fxo number
+config_get field_ec_enable fxo field_ec_enable
+config_get field_dc_filter_enable fxo field_dc_filter_enable
+config_get field_hec_filter_enable fxo field_hec_filter_enable
+config_get field_nlp_control_enable fxo field_nlp_control_enable
+config_get field_nlp_tune fxo field_nlp_tune
+config_get field_comfort_noise fxo field_comfort_noise
+config_get field_ec_tail fxo field_ec_tail
+
+        if [ "$field_ec_tail" = "default" ]; then
+            field_ec_tail=$field_global_ec_tail
+        fi
+
+	bit13=0
+	bit12=1
+	bit09=0
+	bit08=0
+	bit05=0
+
+        case $field_ec_enable in
+        default) 
+                 if [ $field_global_ec_enable ] ; then
+                    bit15=1
+                 else
+                    bit15=0
+                 fi;;
+        enable) bit15=1;;
+        disable) bit15=0;;
+        esac         
+
+        case $field_dc_filter_enable in
+        default) if [ $field_global_dc_filter_enable ]; then
+                    bit14=0
+                 else
+                    bit14=1
+                 fi;;
+        enable) bit14=0;;
+        disable) bit14=1;;
+        esac         
+
+        case $field_hec_filter_enable in
+        default) if [ $field_global_hec_filter_enable ]; then
+                    bit11=1
+                 else
+                    bit11=0
+                 fi;;
+        enable) bit14=1;;
+        disable) bit14=0;;
+        esac         
+
+        case $field_nlp_control_enable in
+        default) if [ $field_global_nlp_control_enable ]; then
+                    bit10=0
+                 else
+                    bit10=1
+                 fi;;
+        enable) bit14=0;;
+        disable) bit14=1;;
+        esac         
+
+        case $field_comfort_noise in
+        default) if [ $field_global_comfort_noise ]; then
+                    bit06=0
+                 else
+                    bit06=1
+                 fi;;
+        enable) bit06=0;;
+        disable) bit06=1;;
+        esac         
+
+        if [ "$field_nlp_tune" = "default" ]; then
+            field_nlp_tune=$field_global_nlp_tune
+        fi
+	case "$field_nlp_tune" in
+	00) bit07=0
+    	    bit04=0;;
+	01) bit07=0
+    	    bit04=1;;
+	10) bit07=1
+    	    bit04=0;;
+	esac
+            
+	a=$bit15$bit14$bit13$bit12
+	b=$bit11$bit10$bit09$bit08
+	c=$bit07$bit06$bit05$bit04
+	d=$field_ec_tail
+
+	output="0x"
+
+	for i in $a $b $c $d
+	do
+    	    case "$i" in
+    	    0000) out=0;;
+    	    0001) out=1;;
+    	    0010) out=2;;
+    	    0011) out=3;;
+    	    0100) out=4;;
+    	    0101) out=5;;
+    	    0110) out=6;;
+    	    0111) out=7;;
+    	    1000) out=8;;
+    	    1001) out=9;;
+    	    1010) out=A;;
+    	    1011) out=B;;
+    	    1100) out=C;;
+    	    1101) out=D;;
+    	    1110) out=E;;
+    	    1111) out=F;;
+    	    esac
+
+    	    output=$output$out
+	done ### for i in $a $b $c $d
+
+##################################################################
+#####          Enhanced Echo Cancellation settings           #####
+##################################################################
+	config_get field_full_filter fxo field_full_filter
+	config_get field_fast_convergence_control fxo field_fast_convergence_control
+
+        case $field_full_filter in
+        default) if [ $field_global_full_filter ]; then
+                    bit15=1
+                 else
+                    bit15=0
+                 fi;;
+        enable) bit15=1;;
+        disable) bit15=0;;
+        esac         
+
+        case $field_fast_convergence_control in
+        default) if [ $field_global_fast_convergence_control ]; then
+                    bit12=1
+                 else
+                    bit12=0
+                 fi;;
+        enable) bit12=1;;
+        disable) bit12=0;;
+        esac         
+
+	temp=$bit15\00$bit12
+        
+	case "$temp" in
+	0000) out=0;;
+	0001) out=1;;
+	1000) out=8;;
+	1001) out=9;;
+	esac
+
+	en_echocan=0x$out\000
+##################################################################
+#####        Dual Filter Echo Cancellation settings          #####
+##################################################################
+    config_get ext_dfec_master_echo_canceller_enable fxo field_dfec_master_echo_canceller_enable
+    config_get ext_dfec_transmit_input_dc_filter_disable fxo field_dfec_transmit_input_dc_filter_disable
+    config_get ext_dfec_tone_transmitter fxo field_dfec_tone_transmitter
+    config_get ext_dfec_init_control_enable fxo field_dfec_init_control_enable
+    config_get ext_dfec_filter_coefficient_freeze fxo field_dfec_filter_coefficient_freeze
+    config_get ext_dfec_nlp_control_enable fxo field_dfec_nlp_control_enable
+    config_get ext_dfec_dynamic_attenuation fxo field_dfec_dynamic_attenuation
+    config_get ext_dfec_background_noise_replacement fxo field_dfec_background_noise_replacement
+    config_get ext_dfec_sparse_foreground_filter fxo field_dfec_sparse_foreground_filter
+    config_get ext_dfec_nlp_comfort_noise_generation fxo field_dfec_nlp_comfort_noise_generation
+    config_get ext_dfec_echo_path_filter_control fxo field_dfec_echo_path_filter_control
+    config_get ext_dfec_recieve_input_dc_filter_enable fxo field_dfec_recieve_input_dc_filter_enable
+    config_get ext_dfec_tail fxo field_dfec_tail
+
+    case "$ext_dfec_master_echo_canceller_enable" in
+    default) if [ $dfec_master_echo_canceller_enable ]; then
+                bit15=1
+             else
+                bit15=0
+             fi;;
+    enable)  bit15=1;;
+    disable) bit15=0;;
+    esac
+
+    
+    case "$ext_dfec_transmit_input_dc_filter_disable" in
+    default) if [ $dfec_transmit_input_dc_filter_disable ]; then
+                bit14=0
+             else
+                bit14=1
+             fi;;
+    enable)  bit14=0;;
+    disable) bit14=1;;
+    esac
+    
+    case "$ext_dfec_tone_transmitter" in
+    default) if [ $dfec_tone_transmitter ]; then
+                bit13=1
+             else
+                bit13=0
+             fi;;
+    enable)  bit13=1;;
+    disable) bit13=0;;
+    esac
+    
+    case "$ext_dfec_init_control_enable" in
+    default) if [ $dfec_init_control_enable ]; then
+                bit12=1
+             else
+                bit12=0
+             fi;;
+    enable)  bit12=1;;
+    disable) bit12=0;;
+    esac
+    
+    case "$ext_dfec_filter_coefficient_freeze" in
+    default) if [ $dfec_filter_coefficient_freeze ]; then
+                bit11=0
+             else
+                bit11=1
+             fi;;
+    enable)  bit11=0;;
+    disable) bit11=1;;
+    esac
+    
+    case "$ext_dfec_nlp_control_enable" in
+    default) if [ $dfec_nlp_control_enable ]; then
+                bit10=0
+             else
+                bit10=1
+             fi;;
+    enable)  bit10=0;;
+    disable) bit10=1;;
+    esac
+    
+    case "$ext_dfec_dynamic_attenuation" in
+    default) if [ $dfec_dynamic_attenuation ]; then
+                bit09=1
+             else
+                bit09=0
+             fi;;
+    enable)  bit09=1;;
+    disable) bit09=0;;
+    esac
+    
+    case "$ext_dfec_background_noise_replacement" in
+    default) if [ $dfec_background_noise_replacement ]; then
+                bit08=1
+             else
+                bit08=0
+             fi;;
+    enable)  bit08=1;;
+    disable) bit08=0;;
+    esac
+    
+    case "$ext_dfec_sparse_foreground_filter" in
+    default) if [ $dfec_sparse_foreground_filter ]; then
+                bit07=1
+             else
+                bit07=0
+             fi;;
+    enable)  bit07=1;;
+    disable) bit07=0;;
+    esac
+    
+    case "$ext_dfec_nlp_comfort_noise_generation" in
+    default) if [ $dfec_nlp_comfort_noise_generation ]; then
+                bit06=0
+             else
+                bit06=1
+             fi;;
+    enable)  bit06=0;;
+    disable) bit06=1;;
+    esac
+    
+    case "$ext_dfec_echo_path_filter_control" in
+    default) if [ $dfec_echo_path_filter_control ]; then
+                bit05=0
+             else
+                bit05=1
+             fi;;
+    enable)  bit05=0;;
+    disable) bit05=1;;
+    esac
+    
+    case "$ext_dfec_recieve_input_dc_filter_enable" in
+    default) if [ $dfec_recieve_input_dc_filter_enable ]; then
+                bit04=1
+             else
+                bit04=0
+             fi;;
+    enable)  bit04=1;;
+    disable) bit04=0;;
+    esac
+    
+    if [ "$ext_dfec_tail" = "default" ]; then
+        ext_dfec_tail=$dfec_tail
+    fi
+
+    a=$bit15$bit14$bit13$bit12
+    b=$bit11$bit10$bit09$bit08
+    c=$bit07$bit06$bit05$bit04
+    
+    dfecoutput="0x"
+    for i in $a $b $c $ext_dfec_tail
+    do
+        case "$i" in
+        0000) out=0;;
+        0001) out=1;;
+        0010) out=2;;
+        0011) out=3;;
+        0100) out=4;;
+        0101) out=5;;
+        0110) out=6;;
+        0111) out=7;;
+        1000) out=8;;
+        1001) out=9;;
+        1010) out=A;;
+        1011) out=B;;
+        1100) out=C;;
+        1101) out=D;;
+        1110) out=E;;
+        1111) out=F;;
+        esac
+
+        dfecoutput=$dfecoutput$out
+    done ### for i in $a $b $c $d
+
+##################################################################
+#####               Completing configurations                #####
+##################################################################
+echo "
+[phone]
+name=$name
+tdmbus=SLIC
+timeslot=16
+callerid=$name <$number> 
+is_mapped_trunk=1 ">> /etc/asterisk/mspd.conf
+[ "$ec_type" = "EC" ] && {
+[ -n "$output" ] && [ "$global_output" != "$output" ] && echo "echocan=$output ">> /etc/asterisk/mspd.conf
+[ -n "$en_echocan" ] && [ "$global_en_echocan" != "$en_echocan" ] && echo "enh_echocan=$en_echocan ">> /etc/asterisk/mspd.conf
+}
+[ "$ec_type" = "DFEC" ] && {
+[ -n "$dfecoutput" ] && [ "$global_dfecoutput" != "$dfecoutput" ] && echo "dualfilterechocan=$dfecoutput ">> /etc/asterisk/mspd.conf
+[ -n "$dfec_tune_config" ] && echo "dfec_tune_config=$dfec_tune_config ">> /etc/asterisk/mspd.conf
+}
+}
+
+echo "" >> /etc/asterisk/extensions.conf
+echo "" >> /etc/asterisk/voicemail.conf
+
+##################################################################
+#####                VoIP Phones Configuration               #####
+##################################################################
+config_get voipphones general voipphones
+phone=1
+while [ "$phone" -le "$voipphones" ]
+do
+    config_get name voip$phone name
+    config_get number voip$phone number
+    config_get authpwd voip$phone authpwd
+    config_get protocol voip$phone protocol
+    config_get type voip$phone type
+    config_get voicemail voip$phone voicemail
+    config_get canreinvite voip$phone canreinvite
+
+##################################################################
+#####                  Completing sip.conf                   #####
+##################################################################
+echo "
+[$number]
+type=$type
+context=default
+username=$number
+secret=$authpwd
+callerid=$name
+host=dynamic" >> /etc/asterisk/sip.conf
+    if [ "$canreinvite" == "yes" ]; then
+        echo "canreinvite=yes" >> /etc/asterisk/sip.conf
+    else
+        echo "canreinvite=no" >> /etc/asterisk/sip.conf
+    fi
+
+##################################################################
+#####Dial Plan Configuration
+#####Adding VoIP Phone Dial Plan in extensions.conf
+    echo "exten => $number,1,Macro(stdexten,SIP/$number,,$number)" >> /etc/asterisk/extensions.conf
+
+##################################################################
+#####Voicemail Configuration
+#####Creating voicemail.conf
+    [ "$voicemail" == "enable" ] && echo "$number => $number,$number,root@localhost" >> /etc/asterisk/voicemail.conf
+
+    phone=`expr $phone + 1`
+
+done ### while [ "$phone" -le "$voipphones" ]
+
+
+##################################################################
+#####             Completing extensions.conf                 #####
+##################################################################
+echo "
+exten => s,1,GotoIf(\$[\${LEN(\${ARG3})} > 0]?4)
+exten => s,n,Set(VMBOX=\${MACRO_EXTEN})
+exten => s,n,Goto(5)
+exten => s,n,Set(VMBOX=\${ARG3})
+exten => s,n,Dial(\${ARG1},20,t\${ARG2})
+exten => s,n,Goto(s-\${DIALSTATUS},1)
+exten => s-ANSWER,1,Hangup
+exten => s-BUSY,1,Voicemail(\${VMBOX}@default,b)
+exten => s-BUSY,n,Hangup
+exten => _s-.,1,Voicemail(\${VMBOX}@default,u)
+exten => _s-.,n,Hangup
+" >> /etc/asterisk/extensions.conf
+
+config_get vm_enable general vm
+config_get vm_ext general vm_main
+if [ "$vm_enable" = "yes" ];then
+echo "
+exten => $vm_ext,1,VoiceMailMain()
+exten => $vm_ext,n,NoOp(\${EXTEN})
+exten => $vm_ext,n,NoOp(\${MACRO_EXTEN})
+exten => $vm_ext,n,Hangup()
+" >> /etc/asterisk/extensions.conf
+fi
+
+config_get vm_operator general vm_operator
+if [ -n "$vm_operator" ]; then
+	operator=`grep "Macro" /etc/asterisk/extensions.conf | grep "$vm_operator"`
+	if [ -n "$operator" ]; then
+		operator_ext=`echo $operator | cut -d, -f4`
+echo "
+exten => o,1,Playback(pbx-transfer)
+exten => o,n,NoOp(Dialing to operator)
+exten => o,n,Macro(stdexten,$operator_ext,,$vm_operator)
+exten => o,n,Hangup
+" >> /etc/asterisk/extensions.conf
+fi
+fi
+
+echo "
+exten => a,1,Hangup	; If user press * exit from voice mail
+" >> /etc/asterisk/extensions.conf
+
+echo "
+[macro-stdexten]
+exten => s, 1, Dial(\${ARG1}, 25, tT)
+exten => s, n, Set(VMBOX=\${MACRO_EXTEN})
+exten => s, n, Goto(s-\${DIALSTATUS},1)
+exten => s-ANSWER,1,Hangup
+exten => s-BUSY,1,Voicemail(\${VMBOX}@default,b)
+exten => s-BUSY,2,Hangup
+exten => _s-.,1,Voicemail(\${VMBOX}@default,u)
+exten => _s-.,2,Hangup
+
+[macro-stdinterasterisk]
+exten => s, 1, Dial(\${ARG1}, 30, tT)
+exten => s, 2, NoOp(\${ARG1})
+exten => s, 3, Hangup()
+
+" >> /etc/asterisk/extensions.conf
+
+##################################################################
+#####                 Conference settings                   ######
+##################################################################
+echo "[conference]" >> /etc/asterisk/extensions.conf
+config_get confcount general confcount
+conf=1
+while [ "$conf" -le "$confcount" ]
+do
+    config_get name conf$conf name
+    config_get number conf$conf number
+    config_get admin_number conf$conf admin_number
+    config_get mode conf$conf wb
+    config_get moh conf$conf moh
+    config_get user_counter conf$conf user_counter
+    config_get sounds conf$conf join_leave_snd
+    options="s"
+    [ -n "$moh" ] && options=$options"M"
+    if [ -n "$user_counter" ]; then
+        options=$options"c"
+    else
+        options=$options"1"
+    fi
+    if [ "$mode" == "enable" ]; then
+    	mode=WIDE
+    else
+        mode=NARROW
+    fi
+
+    echo "exten => $number,1,Answer()" >> /etc/asterisk/extensions.conf
+    if [ -n "$sounds" ]; then
+        echo "exten => $number,n,Set(CONFBRIDGE_JOIN_SOUND=en/beep)" >> /etc/asterisk/extensions.conf
+        echo "exten => $number,n,Set(CONFBRIDGE_LEAVE_SOUND=en/beep)" >> /etc/asterisk/extensions.conf
+    fi
+    echo "exten => $number,n,Set(MSPD_CONF_BRIDGE_MODE=$mode)" >> /etc/asterisk/extensions.conf
+    echo "exten => $number,n,ConfBridge($name,$options)" >> /etc/asterisk/extensions.conf
+
+    [ -n "$admin_number" ] && {
+    options=$options"a"
+    echo "exten => $admin_number,1,Answer()" >> /etc/asterisk/extensions.conf
+    if [ -n "$sounds" ]; then
+        echo "exten => $admin_number,n,Set(CONFBRIDGE_JOIN_SOUND=en/beep)" >> /etc/asterisk/extensions.conf
+        echo "exten => $admin_number,n,Set(CONFBRIDGE_LEAVE_SOUND=en/beep)" >> /etc/asterisk/extensions.conf
+    fi
+    echo "exten => $admin_number,n,Set(MSPD_CONF_BRIDGE_MODE=$mode)" >> /etc/asterisk/extensions.conf
+    echo "exten => $admin_number,n,ConfBridge($name,$options)" >> /etc/asterisk/extensions.conf
+    }
+    conf=`expr $conf + 1`
+done
+
+##################################################################
+#####            Completing SIP Proxy settings               #####
+##################################################################
+echo "
+$extpxycntx_cmd
+" >> /etc/asterisk/extensions.conf
+
+##################################################################

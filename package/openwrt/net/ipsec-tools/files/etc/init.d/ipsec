@@ -1,0 +1,438 @@
+#!/bin/sh /etc/rc.common
+# Copyright (C) 2006 OpenWrt.org
+
+START=60
+TEMP_CONFIG_ADD_FILE="/tmp/ipsec_config_add"
+TEMP_CONFIG_DEL_FILE="/tmp/ipsec_config_add"
+
+getipquadprefix()
+{
+  if [ $1 = 255 ] ; then
+     return 8
+  elif [ $1 = 254 ] ; then
+    return 7
+  elif [ $1 = 252 ] ; then
+    return 6
+  elif [ $1 = 248 ] ; then
+    return 5
+  elif [ $1 = 240 ] ; then
+    return 4
+  elif [ $1 = 224 ] ; then
+    return 3
+  elif [ $1 = 192 ] ; then
+    return 2
+  elif [ $1 = 128 ] ; then
+    return 1
+  elif [ $1 = 0  ] ; then
+    return 0
+  else
+    return 0
+  fi
+}
+
+ipmasktoprefix()
+{
+   if [ ! "$2" = "ip" ] ; then
+     return $1
+   fi
+   quad1=`echo "$1" | sed 's/\./ /g' | awk '{print $1}'`
+   quad2=`echo "$1" | sed 's/\./ /g' | awk '{print $2}'`
+   quad3=`echo "$1" | sed 's/\./ /g' | awk '{print $3}'`
+   quad4=`echo "$1" | sed 's/\./ /g' | awk '{print $4}'`
+   ipprefix=0
+   getipquadprefix $quad1 $ipquadval
+   ipquadval=$?
+   ipprefix=`expr $ipprefix + $ipquadval`
+   getipquadprefix $quad2 $ipquadval
+   ipquadval=$?
+   ipprefix=`expr $ipprefix + $ipquadval`
+   getipquadprefix $quad3 $ipquadval
+   ipquadval=$?
+   ipprefix=`expr $ipprefix + $ipquadval`
+   getipquadprefix $quad4 $ipquadval
+   ipquadval=$?
+   ipprefix=`expr $ipprefix + $ipquadval`
+   return $ipprefix
+}
+
+set_ipsec_visible() {
+	if [ -d /www/cgi-bin/webif ]; then
+	  if [ $1 -eq 0 ]; then
+		### Making VPN tab to invisible
+		sed -i 's/##WEBIF:category:VPN/??WEBIF:category:VPN/' /www/cgi-bin/webif/.categories
+	  else
+		### If VPN tab is invisible make it to visible
+		sed -i 's/??WEBIF:category:VPN/##WEBIF:category:VPN/' /www/cgi-bin/webif/.categories
+	  fi
+	fi
+}
+
+boot() {
+	set_ipsec_visible 1
+	include /lib/network
+	scan_interfaces
+	
+	config_get WAN wan ifname
+	config_get LAN lan ifname
+        #touch $TEMP_CONFIG_FILE
+        echo "" > $TEMP_CONFIG_ADD_FILE
+
+        ##wanifname=`uci get network.wan.ifname`
+        count=`uci get ipsec.general.count`
+        ruleid=1
+        while [ "$ruleid" -le "$count" ]
+        do
+         enable=`uci get ipsec.ipsec$ruleid.StatusEnable`
+         if [ "$enable" = "1" ] ; then 
+          #new=`uci get ipsec.ipsec$ruleid.NewRule`
+          #delete=`uci get ipsec.ipsec$ruleid.DeleteRule`
+          ipversion=`uci get ipsec.ipsec$ruleid.IPVersion`
+          protocol=`uci get ipsec.ipsec$ruleid.Protocol`
+          wanip=`uci get ipsec.ipsec$ruleid.LocalGwIp`
+          remotegwip=`uci get ipsec.ipsec$ruleid.RemoteGwIp`
+          localnw=`uci get ipsec.ipsec$ruleid.LocalNw`
+          remotenw=`uci get ipsec.ipsec$ruleid.RemoteNw`
+          localip=`uci get ipsec.ipsec$ruleid.LocalIp`
+          if [ "$localnw" = "subnet" ] ; then
+            localnetmask=`uci get ipsec.ipsec$ruleid.LocalNetmask`
+          else
+            localnetmask=""
+          fi
+          remoteip=`uci get ipsec.ipsec$ruleid.RemoteIp`
+          if [ "$remotenw" = "subnet" ] ; then
+            remotenetmask=`uci get ipsec.ipsec$ruleid.RemoteNetmask`
+          fi
+          spiin=`uci get ipsec.ipsec$ruleid.SpiIn`
+          spiout=`uci get ipsec.ipsec$ruleid.SpiOut`
+          encalgo=`uci get ipsec.ipsec$ruleid.EncAlgo`
+          if [ "$encalgo" != "null" -a "$encalgo" != " " ] ; then
+            enckeyin=`uci get ipsec.ipsec$ruleid.EncKeyIn`
+            enckeyout=`uci get ipsec.ipsec$ruleid.EncKeyOut`
+          else
+            enckeyin="" 
+            enckeyout=""
+          fi
+          authalgo=`uci get ipsec.ipsec$ruleid.AuthAlgo`
+          if [ "$authalgo" != "null" -a "$authalgo" != " " ] ; then
+            authkeyin=`uci get ipsec.ipsec$ruleid.AuthKeyIn`
+            authkeyout=`uci get ipsec.ipsec$ruleid.AuthKeyOut`
+          else
+            authkeyin=""
+            authkeyout=""
+          fi
+
+          ### WAN interface ipaddress
+          ##wanconfig=$(ifconfig -a 2>&1 | grep -A 8 "$wanifname[[:space:]]")
+          ##if [ -n "$wanconfig" ]; then
+            ##wanip=$(echo "$wanconfig" | grep "inet addr" | cut -d: -f 2 | sed s/Bcast//g)
+            #if [ -n "$wanip" ] ; then
+            #  return
+            #fi
+            ##Encryption Key
+            if [ "$protocol" = "esp" ] ; then
+              if [ "$encalgo" != "null" -a "$encalgo" != " " ] ; then
+                case "$encalgo" in
+                  aes-128|aes-192|aes-256) encalgo="rijndael-cbc" ;;
+                esac
+                case "$enckeyout" in
+                  0x*|0X*) encalgokeyout=" -E $encalgo $enckeyout" ;;
+                  *) encalgokeyout=" -E $encalgo \"$enckeyout\"" ;;
+                esac
+                case "$enckeyin" in
+                  0x*|0X*)  encalgokeyin=" -E $encalgo $enckeyin" ;;
+                  *) encalgokeyin=" -E $encalgo \"$enckeyin\"" ;;
+                esac
+              else
+                encalgokeyout=" -E null "
+                encalgokeyin=" -E null "
+              fi
+            else
+              encalgokeyout=""
+              encalgokeyin=""
+            fi
+            ### Authentication key
+            if [ "$authalgo" != "null" -a "$authalgo" != " " ] ; then
+              case "$authkeyout" in
+                0x*|0X*) authalgokeyout=" -A $authalgo $authkeyout" ;;
+                * ) authalgokeyout=" -A $authalgo \"$authkeyout\"" ;;
+              esac
+              case "$authkeyin" in
+                0x*|0X*) authalgokeyin=" -A $authalgo $authkeyin" ;;
+                * ) authalgokeyin=" -A $authalgo \"$authkeyin\"" ;;
+              esac
+            else
+                authalgokeyout=" -A null "
+                authalgokeyin=" -A null "
+            fi
+            ###tunnel
+            if [ "$protocol" = "esp" ] ; then
+              outtunnel=esp/tunnel/$wanip-$remotegwip/require
+              intunnel=esp/tunnel/$remotegwip-$wanip/require
+            elif [ "$protocol" = "ah" ] ; then
+              outtunnel=ah/tunnel/$wanip-$remotegwip/require
+              intunnel=ah/tunnel/$remotegwip-$wanip/require
+            else
+              outtunnel=""
+              intunnel=""
+            fi
+            ###LocalNetwork
+            if [ "$localnw" = "single" ] ; then
+              localnetwork=$localip
+            elif [ "$localnw" = "subnet" ] ; then
+              ipmasktoprefix $localnetmask $ipversion
+              ipmaskprefix=$?
+              localnetwork="$localip/$ipmaskprefix"
+            else
+              localnetwork="1.0.0.0/0"
+            fi
+            ###RemoteNetwork
+            if [ "$remotenw" = "single" ] ; then
+              remotenetwork=$remoteip
+            elif [ "$remotenw" = "subnet" ] ; then
+              ipmasktoprefix $remotenetmask $ipversion
+              ipmaskprefix=$?
+              remotenetwork="$remoteip/$ipmaskprefix"
+            else
+              remotenetwork="1.0.0.0/0"
+            fi
+            echo "
+add $wanip $remotegwip $protocol $spiout -m tunnel $encalgokeyout $authalgokeyout;
+add $remotegwip $wanip $protocol $spiin -m tunnel $encalgokeyin $authalgokeyin;
+spdadd $localnetwork $remotenetwork any -P out ipsec $outtunnel;
+spdadd $remotenetwork $localnetwork any -P in ipsec $intunnel;
+                        " >> $TEMP_CONFIG_ADD_FILE
+          ##fi
+          fi ## end if for enable condition
+          ruleid=`expr $ruleid + 1`
+        done
+        setkey -f $TEMP_CONFIG_ADD_FILE
+      #  echo "" > $TEMP_CONFIG_ADD_FILE
+        rm -rf /etc/config/ipsec_new
+        echo "
+config ipsec general
+         option count '0'
+             " >  /etc/config/ipsec_new
+       } 
+
+apply() {
+          ##wanifname=`uci get network.wan.ifname`
+          count=`uci get ipsec_new.general.count`
+          ruleid=1
+          echo "" > $TEMP_CONFIG_ADD_FILE
+          echo "" > $TEMP_CONFIG_DEL_FILE
+          while [ "$ruleid" -le "$count" ]
+          do
+            new=`uci get ipsec_new.ipsec_new$ruleid.NewRule`
+            modify=`uci get ipsec_new.ipsec_new$ruleid.ModifyRule`
+            delete=`uci get ipsec_new.ipsec_new$ruleid.DeleteRule`
+            ipversion=`uci get ipsec_new.ipsec_new$ruleid.IPVersion`
+            protocol=`uci get ipsec_new.ipsec_new$ruleid.Protocol`
+            wanip=`uci get ipsec_new.ipsec_new$ruleid.LocalGwIp`
+            remotegwip=`uci get ipsec_new.ipsec_new$ruleid.RemoteGwIp`
+            localnw=`uci get ipsec_new.ipsec_new$ruleid.LocalNw`
+            remotenw=`uci get ipsec_new.ipsec_new$ruleid.RemoteNw`
+            localip=`uci get ipsec_new.ipsec_new$ruleid.LocalIp`
+            if [ "$localnw" = "subnet" ] ; then
+              localnetmask=`uci get ipsec_new.ipsec_new$ruleid.LocalNetmask`
+            else
+              localnetmask=""
+            fi
+            remoteip=`uci get ipsec_new.ipsec_new$ruleid.RemoteIp`
+            if [ "$remotenw" = "subnet" ] ; then
+              remotenetmask=`uci get ipsec_new.ipsec_new$ruleid.RemoteNetmask`
+            else
+              remotenetmask=""
+            fi
+            spiin=`uci get ipsec_new.ipsec_new$ruleid.SpiIn`
+            spiout=`uci get ipsec_new.ipsec_new$ruleid.SpiOut`
+            if [ "$delete" = "0" ] ; then
+              encalgo=`uci get ipsec_new.ipsec_new$ruleid.EncAlgo`
+              if [ "$encalgo" != "null" -a "$encalgo" != " " ] ; then
+                enckeyin=`uci get ipsec_new.ipsec_new$ruleid.EncKeyIn`
+                enckeyout=`uci get ipsec_new.ipsec_new$ruleid.EncKeyOut`
+              else
+                enckeyin=""
+                enckeyout=""
+              fi
+              authalgo=`uci get ipsec_new.ipsec_new$ruleid.AuthAlgo`
+              if [ "$authalgo" != "null" -a "$authalgo" != " " ] ; then
+                authkeyin=`uci get ipsec_new.ipsec_new$ruleid.AuthKeyIn`
+                authkeyout=`uci get ipsec_new.ipsec_new$ruleid.AuthKeyOut`
+              else
+                authkeyin=""
+                authkeyout=""
+              fi
+            fi
+            if [ "$modify" = "1" ] ; then
+              #oldruleid=`uci get ipsec_new.ipsec_new$ruleid.PolicyId`
+              oldipversion=`uci get ipsec_new.ipsec_new$ruleid.OldIPVersion`
+              oldprotocol=`uci get ipsec_new.ipsec_new$ruleid.OldProtocol`
+              oldwanip=`uci get ipsec_new.ipsec_new$ruleid.OldLocalGwIp`
+              oldremotegwip=`uci get ipsec_new.ipsec_new$ruleid.OldRemoteGwIp`
+              oldlocalnw=`uci get ipsec_new.ipsec_new$ruleid.OldLocalNw`
+              oldremotenw=`uci get ipsec_new.ipsec_new$ruleid.OldRemoteNw`
+              oldlocalip=`uci get ipsec_new.ipsec_new$ruleid.OldLocalIp`
+              if [ "$oldlocalnw" = "subnet" ] ; then
+                oldlocalnetmask=`uci get ipsec_new.ipsec_new$ruleid.OldLocalNetmask`
+              else
+                oldlocalnetmask=""
+              fi
+              oldremoteip=`uci get ipsec_new.ipsec_new$ruleid.OldRemoteIp`
+              if [ "$oldremotenw" = "subnet" ] ; then
+                oldremotenetmask=`uci get ipsec_new.ipsec_new$ruleid.OldRemoteNetmask`
+              else
+                oldremotenetmask=""
+              fi
+              oldspiin=`uci get ipsec_new.ipsec_new$ruleid.OldSpiIn`
+              oldspiout=`uci get ipsec_new.ipsec_new$ruleid.OldSpiOut`
+            fi 
+
+            ### WAN interface ipaddress
+            ##wanconfig=$(ifconfig -a 2>&1 | grep -A 8 "$wanifname[[:space:]]")
+            ##if [ -n "$wanconfig" ]; then
+              ##wanip=$(echo "$wanconfig" | grep "inet addr" | cut -d: -f 2 | sed s/Bcast//g)
+              #if [ -n "$wanip" ] ; then
+              #  return
+              #fi
+
+              ##Encryption Key
+            if [ "$delete" = "0" ] ; then
+              if [ "$protocol" = "esp" ] ; then
+                if [ "$encalgo" != "null" -a "$encalgo" != " " ] ; then
+                  case "$encalgo" in
+                    aes-128|aes-192|aes-256) encalgo="rijndael-cbc" ;;
+                  esac
+                  case "$enckeyout" in
+                    0x*|0X*) encalgokeyout=" -E $encalgo $enckeyout" ;;
+                    *) encalgokeyout=" -E $encalgo \"$enckeyout\"" ;;
+                  esac
+                  case "$enckeyin" in
+                    0x*|0X*)  encalgokeyin=" -E $encalgo $enckeyin" ;;
+                    *) encalgokeyin=" -E $encalgo \"$enckeyin\"" ;;
+                  esac
+                else
+                  encalgokeyout=" -E null "
+                  encalgokeyin=" -E null "
+                fi
+              else
+                encalgokeyout=""
+                encalgokeyin=""
+              fi
+              ### Authentication key
+              if [ "$authalgo" != "null" -a "$authalgo" != " " ] ; then
+                case "$authkeyout" in
+                  0x*|0X*) authalgokeyout=" -A $authalgo $authkeyout" ;;
+                  * ) authalgokeyout=" -A $authalgo \"$authkeyout\"" ;;    
+                esac  
+                case "$authkeyin" in
+                  0x*|0X*) authalgokeyin=" -A $authalgo $authkeyin" ;;
+                  * ) authalgokeyin=" -A $authalgo \"$authkeyin\"" ;;
+                esac
+              else
+                  authalgokeyout=" -A null "
+                  authalgokeyin=" -A null "
+              fi
+            fi
+              if [ "$protocol" = "esp" ] ; then
+                outtunnel=esp/tunnel/$wanip-$remotegwip/require
+                intunnel=esp/tunnel/$remotegwip-$wanip/require
+              elif [ "$protocol" = "ah" ] ; then
+                outtunnel=ah/tunnel/$wanip-$remotegwip/require
+                intunnel=ah/tunnel/$remotegwip-$wanip/require
+              else
+                outtunnel=""
+                intunnel=""
+              fi
+              ###LocalNetwork
+              if [ "$localnw" = "single" ] ; then
+                localnetwork=$localip
+              elif [ "$localnw" = "subnet" ] ; then
+                ipmasktoprefix $localnetmask $ipversion
+                ipmaskprefix=$?
+                localnetwork="$localip/$ipmaskprefix"
+              else
+                localnetwork="1.0.0.0/0"
+              fi
+              ###RemoteNetwork
+              if [ "$remotenw" = "single" ] ; then
+                remotenetwork=$remoteip
+              elif [ "$remotenw" = "subnet" ] ; then
+                ipmasktoprefix $remotenetmask $ipversion
+                ipmaskprefix=$?
+                remotenetwork="$remoteip/$ipmaskprefix"
+              else
+                remotenetwork="1.0.0.0/0"
+              fi
+
+              case $modify in
+                1)
+                   ###LocalNetwork
+                   if [ "$oldlocalnw" = "single" ] ; then
+                     oldlocalnetwork=$oldlocalip
+                   elif [ "$oldlocalnw" = "subnet" ] ; then
+                     ipmasktoprefix $oldlocalnetmask $oldipversion
+                     oldipmaskprefix=$?
+                     oldlocalnetwork="$oldlocalip/$oldipmaskprefix"
+                   else
+                     oldlocalnetwork="1.0.0.0/0"
+                   fi
+                   ###RemoteNetwork
+                   if [ "$oldremotenw" = "single" ] ; then
+                     oldremotenetwork=$oldremoteip
+                   elif [ "$oldremotenw" = "subnet" ] ; then
+                     ipmasktoprefix $oldremotenetmask $oldipversion
+                     oldipmaskprefix=$?
+                     oldremotenetwork="$oldremoteip/$oldipmaskprefix"
+                   else
+                     oldremotenetwork="1.0.0.0/0"
+                   fi 
+                   ;;
+              esac
+
+              case $new in
+                1) echo "
+add $wanip $remotegwip $protocol $spiout -m tunnel $encalgokeyout $authalgokeyout;
+add $remotegwip $wanip $protocol $spiin -m tunnel $encalgokeyin $authalgokeyin;
+spdadd $localnetwork $remotenetwork any -P out ipsec $outtunnel;
+spdadd $remotenetwork $localnetwork any -P in ipsec $intunnel;
+                        " >> $TEMP_CONFIG_ADD_FILE ;;
+              esac
+              case $delete in
+                1) echo "
+delete $wanip $remotegwip $protocol $spiout;
+delete $remotegwip $wanip $protocol $spiin;
+spddelete $localnetwork $remotenetwork any -P out;
+spddelete $remotenetwork $localnetwork any -P in;
+                        " >> $TEMP_CONFIG_DEL_FILE ;;
+              esac
+              case $modify in
+                1) echo "
+delete $oldwanip $oldremotegwip $oldprotocol $oldspiout;
+delete $oldremotegwip $oldwanip $oldprotocol $oldspiin;
+spddelete $oldlocalnetwork $oldremotenetwork any -P out;
+spddelete $oldremotenetwork $oldlocalnetwork any -P in;
+                        " >> $TEMP_CONFIG_DEL_FILE 
+                   echo "
+add $wanip $remotegwip $protocol $spiout -m tunnel $encalgokeyout $authalgokeyout;
+add $remotegwip $wanip $protocol $spiin -m tunnel $encalgokeyin $authalgokeyin;
+spdadd $localnetwork $remotenetwork any -P out ipsec $outtunnel;
+spdadd $remotenetwork $localnetwork any -P in ipsec $intunnel;
+                        " >> $TEMP_CONFIG_ADD_FILE ;;
+              esac
+            #else
+            #
+            ##fi
+            ruleid=`expr $ruleid + 1`
+          done
+          # setkey -f $TEMP_CONFIG_DEL_FILE
+          setkey -f $TEMP_CONFIG_ADD_FILE
+          #echo "" > $TEMP_CONFIG_FILE
+          rm -rf /etc/config/ipsec_new
+          echo "
+config ipsec general
+         option count '0'
+               " >  /etc/config/ipsec_new
+}
+
+EXTRA_HELP="	apply	Apply new rules"
+EXTRA_COMMANDS="apply"

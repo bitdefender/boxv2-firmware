@@ -1,0 +1,5 @@
+config tcp_lro
+	option ifname	eth0
+	option ifname   eth2
+	option ifname	ra0
+	option ifname   rai0

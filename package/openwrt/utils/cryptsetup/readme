@@ -1,0 +1,5 @@
+SOURCE:This has been taken from barrier breaker packages 14.07 of revison 44441
+
+URL:https://dev.openwrt.org/browser/branches/packages_14.07/utils?rev=44441
+SUPPORT : utility to setup cryptographic volumes for dm-crypt.
+

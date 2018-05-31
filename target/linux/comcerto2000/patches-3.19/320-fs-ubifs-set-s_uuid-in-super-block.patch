@@ -1,0 +1,12 @@
+diff --git a/fs/ubifs/super.c b/fs/ubifs/super.c
+index bff1e8d6f7bd..a584b2f2b11d 100644
+--- a/fs/ubifs/super.c
++++ b/fs/ubifs/super.c
+@@ -2077,6 +2077,7 @@ static int ubifs_fill_super(struct super_block *sb, void *data, int silent)
+ 		err = -ENOMEM;
+ 		goto out_umount;
+ 	}
++	memcpy(&sb->s_uuid, &c->uuid, sizeof(c->uuid));
+ 
+ 	mutex_unlock(&c->umount_mutex);
+ 	return 0;

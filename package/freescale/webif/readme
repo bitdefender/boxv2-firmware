@@ -1,0 +1,28 @@
+SOURCE: https://github.com/openwrt-es/barrier-breaker-openwrt-xwrt/tree/master/webif
+Branch Name: Master
+
+MORE INFO:
+commit 2c050ff07076e4d54227cfd64c6cbda003f5c943
+Author: fofware@gmail.com <fofware@gmail.com@2dee665f-611b-0410-ab39-d748a57cfec1>
+Date:   Tue Jan 3 15:20:39 2012 +0000
+Title:  I'm back new version mroute work better
+
+CHANGES:
+1. Added soft-link for functions.sh in base-files/files/etc
+2. Modified init.d/webif file
+3. New GUI pages added
+   dash.sh, status-connectivity.sh
+4. Webif config file updated
+5. apply.sh(webif/files/usr/lib/webif/apply.sh) updated with the all GUI configuration pages apply steps.
+6. For GUI look & feel webif image directory(webif/files/www/images) updated.
+   GUI pages framework changes. (common.awk, form.awk, webif.sh and config.sh)
+   GUI page input validations are updated(validate.awk).
+   GUI pages categories updated(.categoriees)
+   GUI page functionality changes.(log-setup.sh, network-services.sh, network-wlan.sh, status-basic.sh, status-diag.sh, system-password.sh, system-settings.sh and system-upgrade.sh)
+   GUI page look & feel changes. (reboot.sh, status-leases.sh, status-usb.sh and system-confman.sh).
+   GUI graph pages look & feel changes.(graph_cpu.svg and graph_if.svg)
+   GUI pages style sheet modified(webif.css and colorize.js)
+7. index.html updated to point dash.sh as first page.
+8. Below unwanted GUI script files are removed.
+   info-about.sh, info-notes.sh, info.sh, network-ddns.sh, network-misc.sh, network-qos.sh, network-wakeonlan.sh, status-asterisk.sh, status-connection.sh, status-conntrackread.sh, status-crontabs.sh, status-iptables.sh, status-modules.sh, status-pppoe.sh, status-processes.sh, status-qos.sh, status-wlan-survey.sh, status-wwaninfo.sh, system-editor.sh, system-mount.sh, system-services.sh, system-snmp.sh, system-crontabs.sh, system-ipkg.sh, system-startup.sh
+

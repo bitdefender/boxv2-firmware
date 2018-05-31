@@ -1,0 +1,6 @@
+CHANGES:
+1. 009-FSL-iproute2_etherip.patch : etheripV6  support.
+2. 121-FSL-iproute-4rd.patch	   : 4rd support : http://enog.jp/~masakazu/vyatta/4rd-linux-image.patch
+3. 211-FSL-iproute2_etheripv4.patch:etheripV4 support.
+
+The patch 211-MSP-ipv6 which is present in the AA is not applied here as the changes were already present in the package

@@ -1,0 +1,15 @@
+Index: pfe-13.00.2/common/control_rtp_relay.c
+===================================================================
+--- pfe-13.00.2.orig/common/control_rtp_relay.c	2016-03-23 12:41:19.000000000 +0200
++++ pfe-13.00.2/common/control_rtp_relay.c	2016-11-11 06:20:10.164445989 +0200
+@@ -1932,8 +1932,8 @@
+ 	slist_head_init(&rtpcall_list);
+ 
+ #if defined(COMCERTO_2000)
+-    for (i = 0; i < NUM_RTPFLOW_ENTRIES; i++)
+-        dlist_head_init(&hw_flow_active_list[i]);
++	for (i = 0; i < NUM_RTPFLOW_ENTRIES; i++)
++		dlist_head_init(&hw_flow_active_list[i]);
+ 
+ 	dlist_head_init(&hw_flow_removal_list);
+ 

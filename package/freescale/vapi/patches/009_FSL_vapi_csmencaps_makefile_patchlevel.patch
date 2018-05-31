@@ -1,0 +1,13 @@
+--- vapi-2.18.0_old/VAPI/linux/gtl_csme/csmencaps/Makefile	2008-06-05 11:17:29.000000000 +0300
++++ vapi-2.18.0/VAPI/linux/gtl_csme/csmencaps/Makefile	2011-12-13 13:12:23.000000000 +0200
+@@ -17,7 +17,9 @@ ifneq ($(ARCH), )
+ OPTIONS += ARCH=$(ARCH)
+ endif
+ 
+-KERNEL_PATCHLEVEL := $(shell grep "PATCHLEVEL =" $(KERNEL_DIR)/Makefile | cut -d" " -f 3)
++#KERNEL_PATCHLEVEL := $(shell grep "PATCHLEVEL =" $(KERNEL_DIR)/Makefile | cut -d" " -f 3)
++# Hardcoding patchlevel to 6 as suggested by VAPI team
++KERNEL_PATCHLEVEL := 6
+ 
+ ifneq ($(KERNEL_PATCHLEVEL), 6)
+ 

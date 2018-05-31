@@ -1,0 +1,38 @@
+From dded44f1aff46ef9cfdcecc52a7688a4b1c73004 Mon Sep 17 00:00:00 2001
+From: Richard Weinberger <richard@nod.at>
+Date: Tue, 22 Sep 2015 23:58:07 +0200
+Subject: UBI: Validate data_size
+
+[ Upstream commit 281fda27673f833a01d516658a64d22a32c8e072 ]
+
+Make sure that data_size is less than LEB size.
+Otherwise a handcrafted UBI image is able to trigger
+an out of bounds memory access in ubi_compare_lebs().
+
+Cc: stable@vger.kernel.org
+Signed-off-by: Richard Weinberger <richard@nod.at>
+Reviewed-by: David Gstir <david@sigma-star.at>
+Signed-off-by: Sasha Levin <sasha.levin@oracle.com>
+---
+ drivers/mtd/ubi/io.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/drivers/mtd/ubi/io.c b/drivers/mtd/ubi/io.c
+index d361349..db657f2 100644
+--- a/drivers/mtd/ubi/io.c
++++ b/drivers/mtd/ubi/io.c
+@@ -921,6 +921,11 @@ static int validate_vid_hdr(const struct ubi_device *ubi,
+ 		goto bad;
+ 	}
+ 
++	if (data_size > ubi->leb_size) {
++		ubi_err("bad data_size");
++		goto bad;
++	}
++
+ 	if (vol_type == UBI_VID_STATIC) {
+ 		/*
+ 		 * Although from high-level point of view static volumes may
+-- 
+cgit v1.1
+

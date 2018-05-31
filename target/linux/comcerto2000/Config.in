@@ -1,0 +1,8 @@
+
+config COMCERTO_PAGE_SIZE_64K
+	bool "Compile kernel with 64kB page size"
+	default y
+	depends TARGET_comcerto2000_nas || TARGET_comcerto2000_hgw_nas
+	help
+	   If set, the Linux kernel will be compiled with a 64kB page size If disabled, the regular 4kB page size will be used.
+

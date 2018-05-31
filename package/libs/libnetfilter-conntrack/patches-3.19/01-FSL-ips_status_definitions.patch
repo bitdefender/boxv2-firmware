@@ -1,0 +1,22 @@
+diff -Naur libnetfilter_conntrack-1.0.4_orig/include/libnetfilter_conntrack/libnetfilter_conntrack.h libnetfilter_conntrack-1.0.4/include/libnetfilter_conntrack/libnetfilter_conntrack.h
+--- libnetfilter_conntrack-1.0.4_orig/include/libnetfilter_conntrack/libnetfilter_conntrack.h	2015-09-30 11:24:43.165527000 +0530
++++ libnetfilter_conntrack-1.0.4/include/libnetfilter_conntrack/libnetfilter_conntrack.h	2015-09-30 16:45:50.004974000 +0530
+@@ -783,6 +783,18 @@
+ 	/* Conntrack is a fake untracked entry */
+ 	IPS_UNTRACKED_BIT = 12,
+ 	IPS_UNTRACKED = (1 << IPS_UNTRACKED_BIT),
++
++	/* Conntrack got a helper explicitly attached via CT target. */
++	IPS_HELPER_BIT = 13,
++	IPS_HELPER = (1 << IPS_HELPER_BIT),
++
++	/* Connection  cannot expire */
++	IPS_PERMANENT_BIT = 14,
++	IPS_PERMANENT = (1 << IPS_PERMANENT_BIT),
++
++	/* Connection is assured by DPI application */
++	IPS_DPI_ALLOWED_BIT = 15,
++	IPS_DPI_ALLOWED = (1 << IPS_DPI_ALLOWED_BIT),
+ };
+ 
+ /* expectation flags */

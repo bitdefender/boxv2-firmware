@@ -1,0 +1,9 @@
+CHANGES:
+1. 021-FSL-4rd-napt-support.patch : for 4rd specific NAPT support.
+2. Makefile : To resolve link error compilation issue, -lm added to LDFLAGS.
+
+
+
+The below Patch is not necesary-Not added
+1. 050-MSPD-nptv6.patch : All the Changes were updated in the package
+   

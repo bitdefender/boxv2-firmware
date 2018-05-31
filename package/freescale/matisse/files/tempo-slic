@@ -1,0 +1,91 @@
+#!/bin/sh /etc/rc.common
+# Copyright (C) 2008 OpenWrt.org
+
+START=54
+
+check_partno() {
+	if [ -e /proc/partno ]; then
+		### Checking for M83242G, M83252G, M83262G series
+		if [ "`grep "M832[4-6]2G" /proc/partno`" ]; then
+			echo "M83242G, M83252G, M83262G series are not supported"
+			exit 1
+		fi
+	fi
+}
+
+tdm_config() {
+	if [ -n "`cat /proc/cpuinfo | grep 'Comcerto 2000'`" ]; then
+		block=`uci get asterisk.general.tdm_block`	
+		case "$block" in
+			tdm)	echo 0 > /sys/devices/platform/comcerto-tdm.0/tdm_mux;;
+			zds)	echo 1 > /sys/devices/platform/comcerto-tdm.0/tdm_mux;;
+			msif) 	echo 0xfe > /sys/devices/platform/comcerto-tdm.0/fs_lwidth
+				echo 2 > /sys/devices/platform/comcerto-tdm.0/fs_hwidth
+				echo 3 > /sys/devices/platform/comcerto-tdm.0/tdm_mux;;
+		esac
+	else
+		echo 2048000 > /sys/devices/platform/comcerto-tdm.0/clock_hz
+		echo 1 > /sys/devices/platform/comcerto-tdm.0/clock_output
+		echo 0xff > /sys/devices/platform/comcerto-tdm.0/fs_lwidth
+		echo 1 > /sys/devices/platform/comcerto-tdm.0/fs_hwidth
+		echo 1 > /sys/devices/platform/comcerto-tdm.0/fs_output
+		echo 0 > /sys/devices/platform/comcerto-tdm.0/fs_polarity
+	fi
+}
+
+load_slic_driver() {
+	if [ -n "`cat /proc/cpuinfo | grep 'Comcerto 2000'`" ]; then
+		block=`uci get asterisk.general.tdm_block`	
+		case "$block" in
+			tdm)	/sbin/kmodloader `find /etc/slic-modules.d/ -name "*proslic"`;;
+			zds)	/sbin/kmodloader `find /etc/slic-modules.d/ -name "*legerity"`;;
+			msif)	/sbin/kmodloader `find /etc/slic-modules.d/ -name "*proslic"`;;
+		esac
+	else
+		/sbin/kmodloader /etc/slic-modules.d/*
+	fi
+}
+
+unload_slic_driver() {
+	#Reverse order of files to unload modules in opposite order of loading
+	for file in `find /etc/slic-modules.d -type f | sort -r`; do
+		#Reverse order of modules listed in file to unload them in opposite order of loading
+		for mod in `cat $file | sed '1!G;h;$!d' | awk '{print $1}'`; do
+			if [ -n "`lsmod | grep $mod`" ]; then
+				rmmod $mod
+			fi 
+		done
+	done
+}
+
+start() {
+	check_partno
+
+	tdm_config
+
+	#Load tempo modules
+	insmod common
+	insmod wan
+	insmod tempo
+
+	load_slic_driver
+
+	#Create nodes if not present
+	if [ ! -c /dev/sti ]
+		then mknod /dev/sti c 242 0
+	fi
+
+	if [ ! -c /dev/wan0 ]
+		then mknod /dev/wan0 c 125 0
+	fi
+}
+
+stop(){
+	check_partno
+
+	unload_slic_driver
+
+	rmmod tempo
+	rmmod wan
+	rmmod common
+}

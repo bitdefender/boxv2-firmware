@@ -1,0 +1,3 @@
+This is freescale prepared package.
+CHANGES:
+1. 01-FSL-disable_async_io.patch : To disable async I/O for uClibc builds. uClibc does not support async I/O.

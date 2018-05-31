@@ -1,0 +1,4099 @@
+diff --git a/Makefile b/Makefile
+index 3429657..3ec036b 100644
+--- a/Makefile
++++ b/Makefile
+@@ -441,15 +441,7 @@ else
+ common-y		:= common/ drivers/ commands/ lib/ net/ fs/
+ endif
+ 
+-# The all: target is the default when no target is given on the
+-# command line.
+-# This allow a user to issue only 'make' to build a kernel
+-# Defaults barebox but it is usually overridden in the arch makefile
+-ifeq ($(CONFIG_COMCERTO_ULOADER)$(CONFIG_COMCERTO_NAND_ULOADER),y)
+-all: barebox.bin uloader.bin
+-else
+-all: barebox.bin barebox_gen
+-endif
++all: uloader.bin
+ 
+ include $(srctree)/arch/$(ARCH)/Makefile
+ 
+@@ -457,6 +449,8 @@ ifdef CONFIG_DEBUG_INFO
+ CFLAGS		+= -g
+ endif
+ 
++CFLAGS          += $(call cc-option, -Wno-unused)
++
+ # Force gcc to behave correct even for buggy distributions
+ CFLAGS          += $(call cc-option, -fno-stack-protector)
+ 
+@@ -484,7 +478,7 @@ endif
+ # this default value
+ export KBUILD_IMAGE ?= barebox
+ 
+-barebox-dirs	:= $(patsubst %/,%,$(filter %/, $(common-y)))
++barebox-dirs	:= $(patsubst %/,%,$(filter %/, $(common-y) $(boardinit-y) ))
+ 
+ barebox-alldirs	:= $(sort $(barebox-dirs) $(patsubst %/,%,$(filter %/, \
+ 		     $(common-n) $(common-) \
+@@ -493,6 +487,8 @@ barebox-alldirs	:= $(sort $(barebox-dirs) $(patsubst %/,%,$(filter %/, \
+ 
+ common-y	:= $(patsubst %/, %/built-in.o, $(common-y))
+ 
++boardinit-y	:= $(patsubst %/, %/built-in.o, $(boardinit-y))
++
+ # Build barebox
+ # ---------------------------------------------------------------------------
+ # barebox is built from the objects selected by $(barebox-init) and
+@@ -520,8 +516,11 @@ common-y	:= $(patsubst %/, %/built-in.o, $(common-y))
+ # System.map is generated to document addresses of all kernel symbols
+ 
+ barebox-common := $(common-y)
+-barebox-all    := $(barebox-common)
++barebox-boardinit := $(boardinit-y)
++
++barebox-all    := $(barebox-common) $(barebox-boardinit)
+ barebox-lds    := $(lds-y)
++boardinit-lds  := $(lds-boardinit-y)
+ 
+ # Rule to link barebox
+ # May be overridden by arch/$(ARCH)/Makefile
+@@ -531,6 +530,12 @@ quiet_cmd_barebox__ ?= LD      $@
+       --start-group $(barebox-common) --end-group                  \
+       $(filter-out $(barebox-lds) $(barebox-common) FORCE ,$^)
+ 
++quiet_cmd_boardinit__ ?= LD      $@
++      cmd_boardinit__ ?= $(LD) $(LDFLAGS) $(LDFLAGS_barebox) -o $@ \
++      -T $(boardinit-lds)                                          \
++      --start-group $(barebox-boardinit) --end-group               \
++      $(filter-out $(boardinit-lds) $(barebox-boardinit) FORCE ,$^)
++
+ # Generate new barebox version
+ quiet_cmd_barebox_version = GEN     .version
+       cmd_barebox_version = set -e;                     \
+@@ -567,6 +572,15 @@ define rule_barebox__
+ 	fi;
+ endef
+ 
++define rule_boardinit__
++	:
++
++	$(call cmd,boardinit__)
++
++	$(Q)echo 'cmd_$@ := $(cmd_boardinit__)' > $(@D)/.$(@F).cmd
++
++endef
++
+ ifdef CONFIG_KALLSYMS
+ # Generate section listing all symbols and add it into barebox $(kallsyms.o)
+ # It's a three stage process:
+@@ -666,20 +680,29 @@ quiet_cmd_objcopy = OBJCOPY $@
+       cmd_objcopy = $(OBJCOPY) $(OBJCOPYFLAGS) $(OBJCOPYFLAGS_$(@F)) $< $@
+ 
+ OBJCOPYFLAGS_barebox.bin = -O binary
++OBJCOPYFLAGS_boardinit.bin = -O binary
+ 
+ barebox.bin: barebox FORCE
+ 	$(call if_changed,objcopy)
+ 
+-barebox_gen:
+-	$(shell cp barebox.bin ./tools/ImageGenarator/.; cd $(srctree)/tools/ImageGenarator/; \
+-		 chmod 755 *.sh; ./barebox_gen.sh 1>/dev/null;)
++boardinit.bin: boardinit FORCE
++	$(call if_changed,objcopy)
+ 
+-uloader.bin: uloader
++uloader.raw: boardinit.bin barebox.bin FORCE
++	@$(OBJDUMP) -D -j .bss boardinit > /dev/null 2> /dev/null; [ $$? -ne 0 ] || (echo .bss not supported in boardinit; false)
++	@echo barebox.bin.z
++	@gzip -nc barebox.bin | dd bs=1 skip=10 2>/dev/null > barebox.bin.z
++	@echo uloader.raw
++	@python -c "import sys, os; x=os.path.getsize('barebox.bin.z'); sys.stdout.write('%c%c\\0\\0' % (x%256,x/256))" | cat boardinit.bin - barebox.bin.z > uloader.raw
+ 
+-uloader:
+-	$(shell cp barebox.bin ./tools/ImageGenarator/.; cd $(srctree)/tools/ImageGenarator/; \
+-		 chmod 755 *.sh; ./uldr_gen.sh 1>/dev/null;)
++barebox_gen:
++	@(cp barebox.bin ./tools/ImageGenarator/.; cd $(srctree)/tools/ImageGenarator/; \
++		 chmod 755 *.sh; ./barebox_gen.sh 1>/dev/null;)
+ 
++uloader.bin: uloader.raw
++	cp uloader.raw ./tools/ImageGenarator/barebox.bin
++	(cd $(srctree)/tools/ImageGenarator/; chmod 755 *.sh; ./uldr_gen.sh)
++	@[ `wc -c uloader.raw | awk '{print $$1}'` -lt 45056 ] || (echo "!!! 44KB exceeded !!!"; false)
+ 
+ ifdef CONFIG_X86
+ barebox.S: barebox
+@@ -717,9 +740,14 @@ barebox: $(barebox-lds) $(barebox-head) $(barebox-common) $(kallsyms.o) FORCE
+ 	$(call if_changed_rule,barebox__)
+ 	$(Q)rm -f .old_version
+ 
++# boardinit image
++boardinit: $(boardinit-lds) $(barebox-boardinit) FORCE
++	$(call if_changed_rule,boardinit__)
++	$(Q)rm -f .old_version
++
+ # The actual objects are generated when descending,
+ # make sure no implicit rule kicks in
+-$(sort $(barebox-head) $(barebox-common) ) $(barebox-lds): $(barebox-dirs) ;
++$(sort $(barebox-head) $(barebox-common) $(barebox-boardinit) ) $(boardinit-lds) $(barebox-lds): $(barebox-dirs) ;
+ 
+ # Handle descending into subdirectories listed in $(barebox-dirs)
+ # Preset locale variables to speed up the build process. Limit locale
+@@ -1017,8 +1045,9 @@ endif # CONFIG_MODULES
+ 
+ # Directories & files removed with 'make clean'
+ CLEAN_DIRS  += $(MODVERDIR)
+-CLEAN_FILES +=	barebox System.map include/generated/barebox_default_env.h \
+-                .tmp_version .tmp_barebox* barebox.bin barebox.S \
++CLEAN_FILES +=	barebox boardinit System.map include/generated/barebox_default_env.h \
++                .tmp_version .tmp_barebox* barebox.bin boardinit.bin barebox.join barebox.S \
++		barebox.bin.z uloader.raw uloader.bin barebox.map \
+ 		.tmp_kallsyms* barebox_default_env barebox.ldr Doxyfile.version
+ 
+ # Directories & files removed with 'make mrproper'
+@@ -1039,7 +1068,7 @@ clean_uldr:
+ #
+ clean: rm-dirs  := $(CLEAN_DIRS)
+ clean: rm-files := $(CLEAN_FILES)
+-clean: clean_uldr
++#clean: clean_uldr
+ clean-dirs      := $(addprefix _clean_,$(srctree) $(barebox-alldirs))
+ 
+ PHONY += $(clean-dirs) clean archclean
+diff --git a/arch/arm/Makefile b/arch/arm/Makefile
+index 4a71988..c05f2d6 100644
+--- a/arch/arm/Makefile
++++ b/arch/arm/Makefile
+@@ -122,8 +122,9 @@ CPPFLAGS += $(patsubst %,-I$(srctree)/%include,$(machdirs))
+ endif
+ 
+ TEXT_BASE = $(CONFIG_TEXT_BASE)
++BOARDINIT_TEXT_BASE = $(CONFIG_BOARDINIT_TEXT_BASE)
+ 
+-CPPFLAGS += -DTEXT_BASE=$(TEXT_BASE) -P
++CPPFLAGS += -DTEXT_BASE=$(TEXT_BASE) -DBOARDINIT_TEXT_BASE=$(BOARDINIT_TEXT_BASE) -P
+ 
+ ifndef CONFIG_MODULES
+ # Add cleanup flags
+@@ -174,7 +175,11 @@ endif
+ common-y += $(BOARD) $(MACH)
+ common-y += arch/arm/lib/ arch/arm/cpu/
+ 
++boardinit-y += arch/arm/boardinit/
++
++lds-boardinit-y	:= arch/arm/boardinit/boardinit.lds
++
+ lds-$(CONFIG_GENERIC_LINKER_SCRIPT)	:= arch/arm/lib/barebox.lds
+ lds-$(CONFIG_BOARD_LINKER_SCRIPT)	:= $(BOARD)/barebox.lds
+ 
+-CLEAN_FILES += include/generated/mach-types.h arch/arm/lib/barebox.lds
++CLEAN_FILES += include/generated/mach-types.h arch/arm/lib/barebox.lds arch/arm/boardinit/boardinit.lds
+diff --git a/arch/arm/boardinit/Makefile b/arch/arm/boardinit/Makefile
+new file mode 100644
+index 0000000..baadb86
+--- /dev/null
++++ b/arch/arm/boardinit/Makefile
+@@ -0,0 +1,23 @@
++# files from arch/arm we only use in boardinit, we only #include the originals
++obj-y += start.o c2k_start.o lowlevel.o pad_config.o
++
++# the rest are also used in barebox.bin
++obj-y += clkcore.o string.o
++
++# only __udivsi3 is used from lib1funcs.o
++obj-y += lib1funcs.o 
++obj-y += div0.o
++
++obj-$(CONFIG_MMU) += mmu.o
++obj-$(CONFIG_COMCERTO_DDR) += ddr.o
++
++obj-$(CONFIG_CPU_32v4T) += cache-armv4.o
++obj-$(CONFIG_CPU_32v5) += cache-armv5.o
++obj-$(CONFIG_CPU_32v6) += cache-armv6.o
++obj-$(CONFIG_CPU_32v7) += cache-armv7.o
++obj-$(CONFIG_CACHE_L2X0) += cache-l2x0.o
++
++# new code added to boardinit
++obj-y += startup.o puff.o
++
++extra-y += boardinit.lds
+diff --git a/arch/arm/boardinit/boardinit.lds.S b/arch/arm/boardinit/boardinit.lds.S
+new file mode 100644
+index 0000000..a99781f
+--- /dev/null
++++ b/arch/arm/boardinit/boardinit.lds.S
+@@ -0,0 +1,60 @@
++/*
++ * (C) Copyright 2000-2004
++ * Wolfgang Denk, DENX Software Engineering, wd@denx.de.
++ *
++ * See file CREDITS for list of people who contributed to this
++ * project.
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License as
++ * published by the Free Software Foundation; either version 2 of
++ * the License, or (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 59 Temple Place, Suite 330, Boston,
++ * MA 02111-1307 USA
++ *
++ */
++
++OUTPUT_FORMAT("elf32-littlearm", "elf32-littlearm", "elf32-littlearm")
++OUTPUT_ARCH(arm)
++ENTRY(exception_vectors)
++SECTIONS
++{
++	. = BOARDINIT_TEXT_BASE;
++
++	. = ALIGN(4);
++	.text      :
++	{
++		_stext = .;
++		_text = .;
++		*(.text_entry*)
++		*(.text*)
++	}
++
++	. = ALIGN(4);
++	.rodata : { *(.rodata*) }
++
++	_etext = .;			/* End of text and rodata section */
++
++	. = ALIGN(4);
++	.data : { *(.data*) }
++
++	. = ALIGN(4);
++	.got : { *(.got*) }
++
++	. = ALIGN(4);
++	__bss_start = .;
++	.bss : { *(.bss*) }
++	__bss_stop = .;
++
++	_end = .;
++
++	_boardinit_image_size = _end - _text;
++}
+diff --git a/arch/arm/boardinit/c2k_start.S b/arch/arm/boardinit/c2k_start.S
+new file mode 100644
+index 0000000..36e4c11
+--- /dev/null
++++ b/arch/arm/boardinit/c2k_start.S
+@@ -0,0 +1 @@
++#include "../mach-comcerto/c2k_start.S"
+diff --git a/arch/arm/boardinit/cache-armv4.S b/arch/arm/boardinit/cache-armv4.S
+new file mode 100644
+index 0000000..dc4a06a
+--- /dev/null
++++ b/arch/arm/boardinit/cache-armv4.S
+@@ -0,0 +1 @@
++#include "../cpu/cache-armv4.S"
+diff --git a/arch/arm/boardinit/cache-armv5.S b/arch/arm/boardinit/cache-armv5.S
+new file mode 100644
+index 0000000..2250604
+--- /dev/null
++++ b/arch/arm/boardinit/cache-armv5.S
+@@ -0,0 +1 @@
++#include "../cpu/cache-armv5.S"
+diff --git a/arch/arm/boardinit/cache-armv6.S b/arch/arm/boardinit/cache-armv6.S
+new file mode 100644
+index 0000000..6f45265
+--- /dev/null
++++ b/arch/arm/boardinit/cache-armv6.S
+@@ -0,0 +1 @@
++#include "../cpu/cache-armv6.S"
+diff --git a/arch/arm/boardinit/cache-armv7.S b/arch/arm/boardinit/cache-armv7.S
+new file mode 100644
+index 0000000..adf94ae
+--- /dev/null
++++ b/arch/arm/boardinit/cache-armv7.S
+@@ -0,0 +1 @@
++#include "../cpu/cache-armv7.S"
+diff --git a/arch/arm/boardinit/cache-l2x0.c b/arch/arm/boardinit/cache-l2x0.c
+new file mode 100644
+index 0000000..f4a84cc
+--- /dev/null
++++ b/arch/arm/boardinit/cache-l2x0.c
+@@ -0,0 +1 @@
++#include "../cpu/cache-l2x0.c"
+diff --git a/arch/arm/boardinit/clkcore.c b/arch/arm/boardinit/clkcore.c
+new file mode 100644
+index 0000000..be56396
+--- /dev/null
++++ b/arch/arm/boardinit/clkcore.c
+@@ -0,0 +1 @@
++#include "../mach-comcerto/clkcore.c"
+diff --git a/arch/arm/boardinit/ddr.c b/arch/arm/boardinit/ddr.c
+new file mode 100644
+index 0000000..d4d4227
+--- /dev/null
++++ b/arch/arm/boardinit/ddr.c
+@@ -0,0 +1 @@
++#include "../mach-comcerto/ddr.c"
+diff --git a/arch/arm/boardinit/div0.c b/arch/arm/boardinit/div0.c
+new file mode 100644
+index 0000000..3d38df7
+--- /dev/null
++++ b/arch/arm/boardinit/div0.c
+@@ -0,0 +1 @@
++#include "../lib/div0.c"
+diff --git a/arch/arm/boardinit/lib1funcs.S b/arch/arm/boardinit/lib1funcs.S
+new file mode 100644
+index 0000000..b08114f
+--- /dev/null
++++ b/arch/arm/boardinit/lib1funcs.S
+@@ -0,0 +1 @@
++#include "../lib/lib1funcs.S"
+diff --git a/arch/arm/boardinit/lowlevel.c b/arch/arm/boardinit/lowlevel.c
+new file mode 100644
+index 0000000..ca97b72
+--- /dev/null
++++ b/arch/arm/boardinit/lowlevel.c
+@@ -0,0 +1 @@
++#include "../mach-comcerto/lowlevel.c"
+diff --git a/arch/arm/boardinit/mmu.c b/arch/arm/boardinit/mmu.c
+new file mode 100644
+index 0000000..7287f78
+--- /dev/null
++++ b/arch/arm/boardinit/mmu.c
+@@ -0,0 +1 @@
++#include "../cpu/mmu.c"
+diff --git a/arch/arm/boardinit/pad_config.c b/arch/arm/boardinit/pad_config.c
+new file mode 100644
+index 0000000..f138536
+--- /dev/null
++++ b/arch/arm/boardinit/pad_config.c
+@@ -0,0 +1 @@
++#include "../mach-comcerto/pad_config.c"
+diff --git a/arch/arm/boardinit/puff.c b/arch/arm/boardinit/puff.c
+new file mode 100644
+index 0000000..6e7f24c
+--- /dev/null
++++ b/arch/arm/boardinit/puff.c
+@@ -0,0 +1,868 @@
++/*
++ * puff.c
++ * Copyright (C) 2002-2013 Mark Adler
++ * For conditions of distribution and use, see copyright notice in puff.h
++ * version 2.3, 21 Jan 2013
++ *
++ * puff.c is a simple inflate written to be an unambiguous way to specify the
++ * deflate format.  It is not written for speed but rather simplicity.  As a
++ * side benefit, this code might actually be useful when small code is more
++ * important than speed, such as bootstrap applications.  For typical deflate
++ * data, zlib's inflate() is about four times as fast as puff().  zlib's
++ * inflate compiles to around 20K on my machine, whereas puff.c compiles to
++ * around 4K on my machine (a PowerPC using GNU cc).  If the faster decode()
++ * function here is used, then puff() is only twice as slow as zlib's
++ * inflate().
++ *
++ * All dynamically allocated memory comes from the stack.  The stack required
++ * is less than 2K bytes.  This code is compatible with 16-bit int's and
++ * assumes that long's are at least 32 bits.  puff.c uses the short data type,
++ * assumed to be 16 bits, for arrays in order to conserve memory.  The code
++ * works whether integers are stored big endian or little endian.
++ *
++ * In the comments below are "Format notes" that describe the inflate process
++ * and document some of the less obvious aspects of the format.  This source
++ * code is meant to supplement RFC 1951, which formally describes the deflate
++ * format:
++ *
++ *    http://www.zlib.org/rfc-deflate.html
++ */
++
++/*
++ * Change history:
++ *
++ * 1.0  10 Feb 2002     - First version
++ * 1.1  17 Feb 2002     - Clarifications of some comments and notes
++ *                      - Update puff() dest and source pointers on negative
++ *                        errors to facilitate debugging deflators
++ *                      - Remove longest from struct huffman -- not needed
++ *                      - Simplify offs[] index in construct()
++ *                      - Add input size and checking, using longjmp() to
++ *                        maintain easy readability
++ *                      - Use short data type for large arrays
++ *                      - Use pointers instead of long to specify source and
++ *                        destination sizes to avoid arbitrary 4 GB limits
++ * 1.2  17 Mar 2002     - Add faster version of decode(), doubles speed (!),
++ *                        but leave simple version for readabilty
++ *                      - Make sure invalid distances detected if pointers
++ *                        are 16 bits
++ *                      - Fix fixed codes table error
++ *                      - Provide a scanning mode for determining size of
++ *                        uncompressed data
++ * 1.3  20 Mar 2002     - Go back to lengths for puff() parameters [Gailly]
++ *                      - Add a puff.h file for the interface
++ *                      - Add braces in puff() for else do [Gailly]
++ *                      - Use indexes instead of pointers for readability
++ * 1.4  31 Mar 2002     - Simplify construct() code set check
++ *                      - Fix some comments
++ *                      - Add FIXLCODES #define
++ * 1.5   6 Apr 2002     - Minor comment fixes
++ * 1.6   7 Aug 2002     - Minor format changes
++ * 1.7   3 Mar 2003     - Added test code for distribution
++ *                      - Added zlib-like license
++ * 1.8   9 Jan 2004     - Added some comments on no distance codes case
++ * 1.9  21 Feb 2008     - Fix bug on 16-bit integer architectures [Pohland]
++ *                      - Catch missing end-of-block symbol error
++ * 2.0  25 Jul 2008     - Add #define to permit distance too far back
++ *                      - Add option in TEST code for puff to write the data
++ *                      - Add option in TEST code to skip input bytes
++ *                      - Allow TEST code to read from piped stdin
++ * 2.1   4 Apr 2010     - Avoid variable initialization for happier compilers
++ *                      - Avoid unsigned comparisons for even happier compilers
++ * 2.2  25 Apr 2010     - Fix bug in variable initializations [Oberhumer]
++ *                      - Add const where appropriate [Oberhumer]
++ *                      - Split if's and ?'s for coverage testing
++ *                      - Break out test code to separate file
++ *                      - Move NIL to puff.h
++ *                      - Allow incomplete code only if single code length is 1
++ *                      - Add full code coverage test to Makefile
++ * 2.3  21 Jan 2013     - Check for invalid code length codes in dynamic blocks
++ * 2.4  20 Feb 2017     - Replace longjmp with plain returns because bootloader
++ */
++
++#include "puff.h"               /* prototype for puff() */
++
++#define local static            /* for local function definitions */
++
++/*
++ * Maximums for allocations and loops.  It is not useful to change these --
++ * they are fixed by the deflate format.
++ */
++#define MAXBITS 15              /* maximum bits in a code */
++#define MAXLCODES 286           /* maximum number of literal/length codes */
++#define MAXDCODES 30            /* maximum number of distance codes */
++#define MAXCODES (MAXLCODES+MAXDCODES)  /* maximum codes lengths to read */
++#define FIXLCODES 288           /* number of fixed literal/length codes */
++
++#define PUFF_SLOW
++
++/* input and output state */
++struct state {
++    /* output state */
++    unsigned char *out;         /* output buffer */
++    unsigned long outlen;       /* available space at out */
++    unsigned long outcnt;       /* bytes written to out so far */
++
++    /* input state */
++    const unsigned char *in;    /* input buffer */
++    unsigned long inlen;        /* available input at in */
++    unsigned long incnt;        /* bytes read so far */
++    int bitbuf;                 /* bit buffer */
++    int bitcnt;                 /* number of bits in bit buffer */
++};
++
++/*
++ * Return need bits from the input stream.  This always leaves less than
++ * eight bits in the buffer.  bits() works properly for need == 0.
++ *
++ * Format notes:
++ *
++ * - Bits are stored in bytes from the least significant bit to the most
++ *   significant bit.  Therefore bits are dropped from the bottom of the bit
++ *   buffer, using shift right, and new bytes are appended to the top of the
++ *   bit buffer, using shift left.
++ */
++local int bits(struct state *s, int need)
++{
++    long val;           /* bit accumulator (can use up to 20 bits) */
++
++    /* load at least need bits into val */
++    val = s->bitbuf;
++    while (s->bitcnt < need) {
++        if (s->incnt == s->inlen)
++            return -1;         /* out of input */
++        val |= (long)(s->in[s->incnt++]) << s->bitcnt;  /* load eight bits */
++        s->bitcnt += 8;
++    }
++
++    /* drop need bits and update buffer, always zero to seven bits left */
++    s->bitbuf = (int)(val >> need);
++    s->bitcnt -= need;
++
++    /* return need bits, zeroing the bits above that */
++    return (int)(val & ((1L << need) - 1));
++}
++
++/*
++ * Process a stored block.
++ *
++ * Format notes:
++ *
++ * - After the two-bit stored block type (00), the stored block length and
++ *   stored bytes are byte-aligned for fast copying.  Therefore any leftover
++ *   bits in the byte that has the last bit of the type, as many as seven, are
++ *   discarded.  The value of the discarded bits are not defined and should not
++ *   be checked against any expectation.
++ *
++ * - The second inverted copy of the stored block length does not have to be
++ *   checked, but it's probably a good idea to do so anyway.
++ *
++ * - A stored block can have zero length.  This is sometimes used to byte-align
++ *   subsets of the compressed data for random access or partial recovery.
++ */
++local int stored(struct state *s)
++{
++    unsigned len;       /* length of stored block */
++
++    /* discard leftover bits from current byte (assumes s->bitcnt < 8) */
++    s->bitbuf = 0;
++    s->bitcnt = 0;
++
++    /* get length and check against its one's complement */
++    if (s->incnt + 4 > s->inlen)
++        return 2;                               /* not enough input */
++    len = s->in[s->incnt++];
++    len |= s->in[s->incnt++] << 8;
++    if (s->in[s->incnt++] != (~len & 0xff) ||
++        s->in[s->incnt++] != ((~len >> 8) & 0xff))
++        return -2;                              /* didn't match complement! */
++
++    /* copy len bytes from in to out */
++    if (s->incnt + len > s->inlen)
++        return 2;                               /* not enough input */
++    if (s->out != NIL) {
++        if (s->outcnt + len > s->outlen)
++            return 1;                           /* not enough output space */
++        while (len--)
++            s->out[s->outcnt++] = s->in[s->incnt++];
++    }
++    else {                                      /* just scanning */
++        s->outcnt += len;
++        s->incnt += len;
++    }
++
++    /* done with a valid stored block */
++    return 0;
++}
++
++/*
++ * Huffman code decoding tables.  count[1..MAXBITS] is the number of symbols of
++ * each length, which for a canonical code are stepped through in order.
++ * symbol[] are the symbol values in canonical order, where the number of
++ * entries is the sum of the counts in count[].  The decoding process can be
++ * seen in the function decode() below.
++ */
++struct huffman {
++    short *count;       /* number of symbols of each length */
++    short *symbol;      /* canonically ordered symbols */
++};
++
++/*
++ * Decode a code from the stream s using huffman table h.  Return the symbol or
++ * a negative value if there is an error.  If all of the lengths are zero, i.e.
++ * an empty code, or if the code is incomplete and an invalid code is received,
++ * then -10 is returned after reading MAXBITS bits.
++ *
++ * Format notes:
++ *
++ * - The codes as stored in the compressed data are bit-reversed relative to
++ *   a simple integer ordering of codes of the same lengths.  Hence below the
++ *   bits are pulled from the compressed data one at a time and used to
++ *   build the code value reversed from what is in the stream in order to
++ *   permit simple integer comparisons for decoding.  A table-based decoding
++ *   scheme (as used in zlib) does not need to do this reversal.
++ *
++ * - The first code for the shortest length is all zeros.  Subsequent codes of
++ *   the same length are simply integer increments of the previous code.  When
++ *   moving up a length, a zero bit is appended to the code.  For a complete
++ *   code, the last code of the longest length will be all ones.
++ *
++ * - Incomplete codes are handled by this decoder, since they are permitted
++ *   in the deflate format.  See the format notes for fixed() and dynamic().
++ */
++#ifdef PUFF_SLOW
++local int decode(struct state *s, const struct huffman *h)
++{
++    int len;            /* current number of bits in code */
++    int code;           /* len bits being decoded */
++    int first;          /* first code of length len */
++    int count;          /* number of codes of length len */
++    int index;          /* index of first code of length len in symbol table */
++
++    code = first = index = 0;
++    for (len = 1; len <= MAXBITS; len++) {
++        int b = bits(s, 1);             /* get next bit */
++        if (b < 0) return -1;
++        code |= b;
++        count = h->count[len];
++        if (code - count < first)       /* if length len, return symbol */
++            return h->symbol[index + (code - first)];
++        index += count;                 /* else update for next length */
++        first += count;
++        first <<= 1;
++        code <<= 1;
++    }
++    return -10;                         /* ran out of codes */
++}
++
++/*
++ * A faster version of decode() for real applications of this code.   It's not
++ * as readable, but it makes puff() twice as fast.  And it only makes the code
++ * a few percent larger.
++ */
++#else /* !PUFF_SLOW */
++local int decode(struct state *s, const struct huffman *h)
++{
++    int len;            /* current number of bits in code */
++    int code;           /* len bits being decoded */
++    int first;          /* first code of length len */
++    int count;          /* number of codes of length len */
++    int index;          /* index of first code of length len in symbol table */
++    int bitbuf;         /* bits from stream */
++    int left;           /* bits left in next or left to process */
++    short *next;        /* next number of codes */
++
++    bitbuf = s->bitbuf;
++    left = s->bitcnt;
++    code = first = index = 0;
++    len = 1;
++    next = h->count + 1;
++    while (1) {
++        while (left--) {
++            code |= bitbuf & 1;
++            bitbuf >>= 1;
++            count = *next++;
++            if (code - count < first) { /* if length len, return symbol */
++                s->bitbuf = bitbuf;
++                s->bitcnt = (s->bitcnt - len) & 7;
++                return h->symbol[index + (code - first)];
++            }
++            index += count;             /* else update for next length */
++            first += count;
++            first <<= 1;
++            code <<= 1;
++            len++;
++        }
++        left = (MAXBITS+1) - len;
++        if (left == 0)
++            break;
++        if (s->incnt == s->inlen)
++            return -1;                  /* out of input */
++        bitbuf = s->in[s->incnt++];
++        if (left > 8)
++            left = 8;
++    }
++    return -10;                         /* ran out of codes */
++}
++#endif /* PUFF_SLOW */
++
++/*
++ * Given the list of code lengths length[0..n-1] representing a canonical
++ * Huffman code for n symbols, construct the tables required to decode those
++ * codes.  Those tables are the number of codes of each length, and the symbols
++ * sorted by length, retaining their original order within each length.  The
++ * return value is zero for a complete code set, negative for an over-
++ * subscribed code set, and positive for an incomplete code set.  The tables
++ * can be used if the return value is zero or positive, but they cannot be used
++ * if the return value is negative.  If the return value is zero, it is not
++ * possible for decode() using that table to return an error--any stream of
++ * enough bits will resolve to a symbol.  If the return value is positive, then
++ * it is possible for decode() using that table to return an error for received
++ * codes past the end of the incomplete lengths.
++ *
++ * Not used by decode(), but used for error checking, h->count[0] is the number
++ * of the n symbols not in the code.  So n - h->count[0] is the number of
++ * codes.  This is useful for checking for incomplete codes that have more than
++ * one symbol, which is an error in a dynamic block.
++ *
++ * Assumption: for all i in 0..n-1, 0 <= length[i] <= MAXBITS
++ * This is assured by the construction of the length arrays in dynamic() and
++ * fixed() and is not verified by construct().
++ *
++ * Format notes:
++ *
++ * - Permitted and expected examples of incomplete codes are one of the fixed
++ *   codes and any code with a single symbol which in deflate is coded as one
++ *   bit instead of zero bits.  See the format notes for fixed() and dynamic().
++ *
++ * - Within a given code length, the symbols are kept in ascending order for
++ *   the code bits definition.
++ */
++local int construct(struct huffman *h, const short *length, int n)
++{
++    int symbol;         /* current symbol when stepping through length[] */
++    int len;            /* current length when stepping through h->count[] */
++    int left;           /* number of possible codes left of current length */
++    short offs[MAXBITS+1];      /* offsets in symbol table for each length */
++
++    /* count number of codes of each length */
++    for (len = 0; len <= MAXBITS; len++)
++        h->count[len] = 0;
++    for (symbol = 0; symbol < n; symbol++)
++        (h->count[length[symbol]])++;   /* assumes lengths are within bounds */
++    if (h->count[0] == n)               /* no codes! */
++        return 0;                       /* complete, but decode() will fail */
++
++    /* check for an over-subscribed or incomplete set of lengths */
++    left = 1;                           /* one possible code of zero length */
++    for (len = 1; len <= MAXBITS; len++) {
++        left <<= 1;                     /* one more bit, double codes left */
++        left -= h->count[len];          /* deduct count from possible codes */
++        if (left < 0)
++            return left;                /* over-subscribed--return negative */
++    }                                   /* left > 0 means incomplete */
++
++    /* generate offsets into symbol table for each length for sorting */
++    offs[1] = 0;
++    for (len = 1; len < MAXBITS; len++)
++        offs[len + 1] = offs[len] + h->count[len];
++
++    /*
++     * put symbols in table sorted by length, by symbol order within each
++     * length
++     */
++    for (symbol = 0; symbol < n; symbol++)
++        if (length[symbol] != 0)
++            h->symbol[offs[length[symbol]]++] = symbol;
++
++    /* return zero for complete set, positive for incomplete set */
++    return left;
++}
++
++/*
++ * Decode literal/length and distance codes until an end-of-block code.
++ *
++ * Format notes:
++ *
++ * - Compressed data that is after the block type if fixed or after the code
++ *   description if dynamic is a combination of literals and length/distance
++ *   pairs terminated by and end-of-block code.  Literals are simply Huffman
++ *   coded bytes.  A length/distance pair is a coded length followed by a
++ *   coded distance to represent a string that occurs earlier in the
++ *   uncompressed data that occurs again at the current location.
++ *
++ * - Literals, lengths, and the end-of-block code are combined into a single
++ *   code of up to 286 symbols.  They are 256 literals (0..255), 29 length
++ *   symbols (257..285), and the end-of-block symbol (256).
++ *
++ * - There are 256 possible lengths (3..258), and so 29 symbols are not enough
++ *   to represent all of those.  Lengths 3..10 and 258 are in fact represented
++ *   by just a length symbol.  Lengths 11..257 are represented as a symbol and
++ *   some number of extra bits that are added as an integer to the base length
++ *   of the length symbol.  The number of extra bits is determined by the base
++ *   length symbol.  These are in the static arrays below, lens[] for the base
++ *   lengths and lext[] for the corresponding number of extra bits.
++ *
++ * - The reason that 258 gets its own symbol is that the longest length is used
++ *   often in highly redundant files.  Note that 258 can also be coded as the
++ *   base value 227 plus the maximum extra value of 31.  While a good deflate
++ *   should never do this, it is not an error, and should be decoded properly.
++ *
++ * - If a length is decoded, including its extra bits if any, then it is
++ *   followed a distance code.  There are up to 30 distance symbols.  Again
++ *   there are many more possible distances (1..32768), so extra bits are added
++ *   to a base value represented by the symbol.  The distances 1..4 get their
++ *   own symbol, but the rest require extra bits.  The base distances and
++ *   corresponding number of extra bits are below in the static arrays dist[]
++ *   and dext[].
++ *
++ * - Literal bytes are simply written to the output.  A length/distance pair is
++ *   an instruction to copy previously uncompressed bytes to the output.  The
++ *   copy is from distance bytes back in the output stream, copying for length
++ *   bytes.
++ *
++ * - Distances pointing before the beginning of the output data are not
++ *   permitted.
++ *
++ * - Overlapped copies, where the length is greater than the distance, are
++ *   allowed and common.  For example, a distance of one and a length of 258
++ *   simply copies the last byte 258 times.  A distance of four and a length of
++ *   twelve copies the last four bytes three times.  A simple forward copy
++ *   ignoring whether the length is greater than the distance or not implements
++ *   this correctly.  You should not use memcpy() since its behavior is not
++ *   defined for overlapped arrays.  You should not use memmove() or bcopy()
++ *   since though their behavior -is- defined for overlapping arrays, it is
++ *   defined to do the wrong thing in this case.
++ */
++local int codes(struct state *s,
++                const struct huffman *lencode,
++                const struct huffman *distcode)
++{
++    int symbol;         /* decoded symbol */
++    int len;            /* length for copy */
++    unsigned dist;      /* distance for copy */
++    static const short lens[29] = { /* Size base for length codes 257..285 */
++        3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31,
++        35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258};
++    static const short lext[29] = { /* Extra bits for length codes 257..285 */
++        0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2,
++        3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0};
++    static const short dists[30] = { /* Offset base for distance codes 0..29 */
++        1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193,
++        257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145,
++        8193, 12289, 16385, 24577};
++    static const short dext[30] = { /* Extra bits for distance codes 0..29 */
++        0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6,
++        7, 7, 8, 8, 9, 9, 10, 10, 11, 11,
++        12, 12, 13, 13};
++
++    /* decode literals and length/distance pairs */
++    do {
++        symbol = decode(s, lencode);
++        if (symbol < 0)
++            return symbol;              /* invalid symbol */
++        if (symbol < 256) {             /* literal: symbol is the byte */
++            /* write out the literal */
++            if (s->out != NIL) {
++                if (s->outcnt == s->outlen)
++                    return 1;
++                s->out[s->outcnt] = symbol;
++            }
++            s->outcnt++;
++        }
++        else if (symbol > 256) {        /* length */
++            int b;
++
++            /* get and compute length */
++            symbol -= 257;
++            if (symbol >= 29)
++                return -10;             /* invalid fixed code */
++            b = bits(s, lext[symbol]);
++            if (b < 0) return -1;
++            len = lens[symbol] + b;
++
++            /* get and check distance */
++            symbol = decode(s, distcode);
++            if (symbol < 0)
++                return symbol;          /* invalid symbol */
++            b = bits(s, dext[symbol]);
++            if (b < 0) return -1;
++            dist = dists[symbol] + b;
++#ifndef INFLATE_ALLOW_INVALID_DISTANCE_TOOFAR_ARRR
++            if (dist > s->outcnt)
++                return -11;     /* distance too far back */
++#endif
++
++            /* copy length bytes from distance bytes back */
++            if (s->out != NIL) {
++                if (s->outcnt + len > s->outlen)
++                    return 1;
++                while (len--) {
++                    s->out[s->outcnt] =
++#ifdef INFLATE_ALLOW_INVALID_DISTANCE_TOOFAR_ARRR
++                        dist > s->outcnt ?
++                            0 :
++#endif
++                            s->out[s->outcnt - dist];
++                    s->outcnt++;
++                }
++            }
++            else
++                s->outcnt += len;
++        }
++    } while (symbol != 256);            /* end of block symbol */
++
++    /* done with a valid fixed or dynamic block */
++    return 0;
++}
++
++/*
++ * Process a fixed codes block.
++ *
++ * Format notes:
++ *
++ * - This block type can be useful for compressing small amounts of data for
++ *   which the size of the code descriptions in a dynamic block exceeds the
++ *   benefit of custom codes for that block.  For fixed codes, no bits are
++ *   spent on code descriptions.  Instead the code lengths for literal/length
++ *   codes and distance codes are fixed.  The specific lengths for each symbol
++ *   can be seen in the "for" loops below.
++ *
++ * - The literal/length code is complete, but has two symbols that are invalid
++ *   and should result in an error if received.  This cannot be implemented
++ *   simply as an incomplete code since those two symbols are in the "middle"
++ *   of the code.  They are eight bits long and the longest literal/length\
++ *   code is nine bits.  Therefore the code must be constructed with those
++ *   symbols, and the invalid symbols must be detected after decoding.
++ *
++ * - The fixed distance codes also have two invalid symbols that should result
++ *   in an error if received.  Since all of the distance codes are the same
++ *   length, this can be implemented as an incomplete code.  Then the invalid
++ *   codes are detected while decoding.
++ */
++local int fixed(struct state *s)
++{
++    static int virgin = 1;
++    static short lencnt[MAXBITS+1] = {1}, lensym[FIXLCODES] = {1};
++    static short distcnt[MAXBITS+1] = {1}, distsym[MAXDCODES] = {1};
++    static struct huffman lencode = {lencnt}, distcode = {distsym};
++
++    /* build fixed huffman tables if first call (may not be thread safe) */
++    if (virgin) {
++        int symbol;
++        short lengths[FIXLCODES];
++
++        /* construct lencode and distcode */
++        lencode.count = lencnt;
++        lencode.symbol = lensym;
++        distcode.count = distcnt;
++        distcode.symbol = distsym;
++
++        /* literal/length table */
++        for (symbol = 0; symbol < 144; symbol++)
++            lengths[symbol] = 8;
++        for (; symbol < 256; symbol++)
++            lengths[symbol] = 9;
++        for (; symbol < 280; symbol++)
++            lengths[symbol] = 7;
++        for (; symbol < FIXLCODES; symbol++)
++            lengths[symbol] = 8;
++        construct(&lencode, lengths, FIXLCODES);
++
++        /* distance table */
++        for (symbol = 0; symbol < MAXDCODES; symbol++)
++            lengths[symbol] = 5;
++        construct(&distcode, lengths, MAXDCODES);
++
++        /* do this just once */
++        virgin = 0;
++    }
++
++    /* decode data until end-of-block code */
++    return codes(s, &lencode, &distcode);
++}
++
++/*
++ * Process a dynamic codes block.
++ *
++ * Format notes:
++ *
++ * - A dynamic block starts with a description of the literal/length and
++ *   distance codes for that block.  New dynamic blocks allow the compressor to
++ *   rapidly adapt to changing data with new codes optimized for that data.
++ *
++ * - The codes used by the deflate format are "canonical", which means that
++ *   the actual bits of the codes are generated in an unambiguous way simply
++ *   from the number of bits in each code.  Therefore the code descriptions
++ *   are simply a list of code lengths for each symbol.
++ *
++ * - The code lengths are stored in order for the symbols, so lengths are
++ *   provided for each of the literal/length symbols, and for each of the
++ *   distance symbols.
++ *
++ * - If a symbol is not used in the block, this is represented by a zero as
++ *   as the code length.  This does not mean a zero-length code, but rather
++ *   that no code should be created for this symbol.  There is no way in the
++ *   deflate format to represent a zero-length code.
++ *
++ * - The maximum number of bits in a code is 15, so the possible lengths for
++ *   any code are 1..15.
++ *
++ * - The fact that a length of zero is not permitted for a code has an
++ *   interesting consequence.  Normally if only one symbol is used for a given
++ *   code, then in fact that code could be represented with zero bits.  However
++ *   in deflate, that code has to be at least one bit.  So for example, if
++ *   only a single distance base symbol appears in a block, then it will be
++ *   represented by a single code of length one, in particular one 0 bit.  This
++ *   is an incomplete code, since if a 1 bit is received, it has no meaning,
++ *   and should result in an error.  So incomplete distance codes of one symbol
++ *   should be permitted, and the receipt of invalid codes should be handled.
++ *
++ * - It is also possible to have a single literal/length code, but that code
++ *   must be the end-of-block code, since every dynamic block has one.  This
++ *   is not the most efficient way to create an empty block (an empty fixed
++ *   block is fewer bits), but it is allowed by the format.  So incomplete
++ *   literal/length codes of one symbol should also be permitted.
++ *
++ * - If there are only literal codes and no lengths, then there are no distance
++ *   codes.  This is represented by one distance code with zero bits.
++ *
++ * - The list of up to 286 length/literal lengths and up to 30 distance lengths
++ *   are themselves compressed using Huffman codes and run-length encoding.  In
++ *   the list of code lengths, a 0 symbol means no code, a 1..15 symbol means
++ *   that length, and the symbols 16, 17, and 18 are run-length instructions.
++ *   Each of 16, 17, and 18 are follwed by extra bits to define the length of
++ *   the run.  16 copies the last length 3 to 6 times.  17 represents 3 to 10
++ *   zero lengths, and 18 represents 11 to 138 zero lengths.  Unused symbols
++ *   are common, hence the special coding for zero lengths.
++ *
++ * - The symbols for 0..18 are Huffman coded, and so that code must be
++ *   described first.  This is simply a sequence of up to 19 three-bit values
++ *   representing no code (0) or the code length for that symbol (1..7).
++ *
++ * - A dynamic block starts with three fixed-size counts from which is computed
++ *   the number of literal/length code lengths, the number of distance code
++ *   lengths, and the number of code length code lengths (ok, you come up with
++ *   a better name!) in the code descriptions.  For the literal/length and
++ *   distance codes, lengths after those provided are considered zero, i.e. no
++ *   code.  The code length code lengths are received in a permuted order (see
++ *   the order[] array below) to make a short code length code length list more
++ *   likely.  As it turns out, very short and very long codes are less likely
++ *   to be seen in a dynamic code description, hence what may appear initially
++ *   to be a peculiar ordering.
++ *
++ * - Given the number of literal/length code lengths (nlen) and distance code
++ *   lengths (ndist), then they are treated as one long list of nlen + ndist
++ *   code lengths.  Therefore run-length coding can and often does cross the
++ *   boundary between the two sets of lengths.
++ *
++ * - So to summarize, the code description at the start of a dynamic block is
++ *   three counts for the number of code lengths for the literal/length codes,
++ *   the distance codes, and the code length codes.  This is followed by the
++ *   code length code lengths, three bits each.  This is used to construct the
++ *   code length code which is used to read the remainder of the lengths.  Then
++ *   the literal/length code lengths and distance lengths are read as a single
++ *   set of lengths using the code length codes.  Codes are constructed from
++ *   the resulting two sets of lengths, and then finally you can start
++ *   decoding actual compressed data in the block.
++ *
++ * - For reference, a "typical" size for the code description in a dynamic
++ *   block is around 80 bytes.
++ */
++local int dynamic(struct state *s)
++{
++    int nlen, ndist, ncode;             /* number of lengths in descriptor */
++    int index;                          /* index of lengths[] */
++    int err;                            /* construct() return value */
++    short lengths[MAXCODES];            /* descriptor code lengths */
++    short lencnt[MAXBITS+1], lensym[MAXLCODES];         /* lencode memory */
++    short distcnt[MAXBITS+1], distsym[MAXDCODES];       /* distcode memory */
++    struct huffman lencode, distcode;   /* length and distance codes */
++    static const short order[19] =      /* permutation of code length codes */
++        {16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15};
++
++    /* construct lencode and distcode */
++    lencode.count = lencnt;
++    lencode.symbol = lensym;
++    distcode.count = distcnt;
++    distcode.symbol = distsym;
++
++    /* get number of lengths in each table, check lengths */
++    nlen = bits(s, 5) + 257;
++    if (nlen < 0) return -1;
++
++    ndist = bits(s, 5) + 1;
++    if (ndist < 0) return -1;
++
++    ncode = bits(s, 4) + 4;
++    if (ncode < 0) return -1;
++
++    if (nlen > MAXLCODES || ndist > MAXDCODES)
++        return -3;                      /* bad counts */
++
++    /* read code length code lengths (really), missing lengths are zero */
++    for (index = 0; index < ncode; index++) {
++        int b = bits(s, 3);
++        if (b < 0) return -1;
++        lengths[order[index]] = b;
++    }
++
++    for (; index < 19; index++)
++        lengths[order[index]] = 0;
++
++    /* build huffman table for code lengths codes (use lencode temporarily) */
++    err = construct(&lencode, lengths, 19);
++    if (err != 0)               /* require complete code set here */
++        return -4;
++
++    /* read length/literal and distance code length tables */
++    index = 0;
++    while (index < nlen + ndist) {
++        int symbol;             /* decoded value */
++        int len;                /* last length to repeat */
++
++        symbol = decode(s, &lencode);
++        if (symbol < 0)
++            return symbol;          /* invalid symbol */
++        if (symbol < 16)                /* length in 0..15 */
++            lengths[index++] = symbol;
++        else {                          /* repeat instruction */
++            len = 0;                    /* assume repeating zeros */
++            if (symbol == 16) {         /* repeat last length 3..6 times */
++                int b;
++
++                if (index == 0)
++                    return -5;          /* no last length! */
++                len = lengths[index - 1];       /* last length */
++
++                b = bits(s, 2);
++                if (b < 0) return -1;
++                symbol = 3 + b;
++            }
++            else if (symbol == 17) {    /* repeat zero 3..10 times */
++                int b = bits(s, 3);
++                if (b < 0) return -1;
++                symbol = 3 + b;
++            }
++            else {                    /* == 18, repeat zero 11..138 times */
++                int b = bits(s, 7);
++                if (b < 0) return -1;
++                symbol = 11 + b;
++            }
++
++            if (index + symbol > nlen + ndist)
++                return -6;              /* too many lengths! */
++            while (symbol--)            /* repeat last or zero symbol times */
++                lengths[index++] = len;
++        }
++    }
++
++    /* check for end-of-block code -- there better be one! */
++    if (lengths[256] == 0)
++        return -9;
++
++    /* build huffman table for literal/length codes */
++    err = construct(&lencode, lengths, nlen);
++    if (err && (err < 0 || nlen != lencode.count[0] + lencode.count[1]))
++        return -7;      /* incomplete code ok only for single length 1 code */
++
++    /* build huffman table for distance codes */
++    err = construct(&distcode, lengths + nlen, ndist);
++    if (err && (err < 0 || ndist != distcode.count[0] + distcode.count[1]))
++        return -8;      /* incomplete code ok only for single length 1 code */
++
++    /* decode data until end-of-block code */
++    return codes(s, &lencode, &distcode);
++}
++
++/*
++ * Inflate source to dest.  On return, destlen and sourcelen are updated to the
++ * size of the uncompressed data and the size of the deflate data respectively.
++ * On success, the return value of puff() is zero.  If there is an error in the
++ * source data, i.e. it is not in the deflate format, then a negative value is
++ * returned.  If there is not enough input available or there is not enough
++ * output space, then a positive error is returned.  In that case, destlen and
++ * sourcelen are not updated to facilitate retrying from the beginning with the
++ * provision of more input data or more output space.  In the case of invalid
++ * inflate data (a negative error), the dest and source pointers are updated to
++ * facilitate the debugging of deflators.
++ *
++ * puff() also has a mode to determine the size of the uncompressed output with
++ * no output written.  For this dest must be (unsigned char *)0.  In this case,
++ * the input value of *destlen is ignored, and on return *destlen is set to the
++ * size of the uncompressed output.
++ *
++ * The return codes are:
++ *
++ *   2:  available inflate data did not terminate
++ *   1:  output space exhausted before completing inflate
++ *   0:  successful inflate
++ *  -1:  invalid block type (type == 3)
++ *  -2:  stored block length did not match one's complement
++ *  -3:  dynamic block code description: too many length or distance codes
++ *  -4:  dynamic block code description: code lengths codes incomplete
++ *  -5:  dynamic block code description: repeat lengths with no first length
++ *  -6:  dynamic block code description: repeat more than specified lengths
++ *  -7:  dynamic block code description: invalid literal/length code lengths
++ *  -8:  dynamic block code description: invalid distance code lengths
++ *  -9:  dynamic block code description: missing end-of-block code
++ * -10:  invalid literal/length or distance code in fixed or dynamic block
++ * -11:  distance is too far back in fixed or dynamic block
++ *
++ * Format notes:
++ *
++ * - Three bits are read for each block to determine the kind of block and
++ *   whether or not it is the last block.  Then the block is decoded and the
++ *   process repeated if it was not the last block.
++ *
++ * - The leftover bits in the last byte of the deflate data after the last
++ *   block (if it was a fixed or dynamic block) are undefined and have no
++ *   expected values to check.
++ */
++int puff(unsigned char *dest,           /* pointer to destination pointer */
++         unsigned long *destlen,        /* amount of output space */
++         const unsigned char *source,   /* pointer to source data pointer */
++         unsigned long *sourcelen)      /* amount of input available */
++{
++    struct state s;             /* input/output state */
++    int last, type;             /* block information */
++    int err;                    /* return value */
++
++    /* initialize output state */
++    s.out = dest;
++    s.outlen = *destlen;                /* ignored if dest is NIL */
++    s.outcnt = 0;
++
++    /* initialize input state */
++    s.in = source;
++    s.inlen = *sourcelen;
++    s.incnt = 0;
++    s.bitbuf = 0;
++    s.bitcnt = 0;
++
++    /* process blocks until last block or error */
++    do {
++        last = bits(&s, 1);         /* one if last block */
++        if (last < 0) return -1;
++
++        type = bits(&s, 2);         /* block type 0..3 */
++        if (type < 0) return -1;
++
++        err = type == 0 ?
++                stored(&s) :
++                (type == 1 ?
++                    fixed(&s) :
++                    (type == 2 ?
++                        dynamic(&s) :
++                        -1));       /* type == 3, invalid */
++        if (err != 0)
++            break;                  /* return with error */
++    } while (!last);
++
++    /* update the lengths and return */
++    if (err <= 0) {
++        *destlen = s.outcnt;
++        *sourcelen = s.incnt;
++    }
++    return err;
++}
+diff --git a/arch/arm/boardinit/start.c b/arch/arm/boardinit/start.c
+new file mode 100644
+index 0000000..5b76530
+--- /dev/null
++++ b/arch/arm/boardinit/start.c
+@@ -0,0 +1 @@
++#include "../cpu/start.c"
+diff --git a/arch/arm/boardinit/startup.c b/arch/arm/boardinit/startup.c
+new file mode 100644
+index 0000000..7215536
+--- /dev/null
++++ b/arch/arm/boardinit/startup.c
+@@ -0,0 +1,6 @@
++#include <linux/compiler.h>
++
++void __noreturn hang (void)
++{
++    for (;;);
++}
+diff --git a/arch/arm/boardinit/string.c b/arch/arm/boardinit/string.c
+new file mode 100644
+index 0000000..bfbf53f
+--- /dev/null
++++ b/arch/arm/boardinit/string.c
+@@ -0,0 +1 @@
++#include "../../../lib/string.c"
+diff --git a/arch/arm/boards/comcerto-boxv2/c2k_boxv2.c b/arch/arm/boards/comcerto-boxv2/c2k_boxv2.c
+index 4e0dbb6..de57269 100644
+--- a/arch/arm/boards/comcerto-boxv2/c2k_boxv2.c
++++ b/arch/arm/boards/comcerto-boxv2/c2k_boxv2.c
+@@ -126,7 +126,7 @@ static struct device_d sdram_dev = {
+ 	.platform_data = &sdram_pdata,
+ };
+ 
+-static struct fast_uart_plat serial_plat = {
++struct fast_uart_plat serial_plat = {
+ 	.clock = 200000000,      /* 200MHz  */
+ };
+ 
+@@ -242,13 +242,14 @@ void GPIO_reset_external_device(int block,int state)
+ 		case COMPONENT_USB_HUB:
+ 			if (state){
+ 				writel(readl(COMCERTO_GPIO_EXT_OUTPUT_REG) & ~GPIO_50, COMCERTO_GPIO_EXT_OUTPUT_REG);
+-				writel( readl(COMCERTO_GPIO_EXT_OE_REG) | GPIO_50, COMCERTO_GPIO_EXT_OE_REG);
+-				writel(readl(COMCERTO_GPIO_EXT_PIN_SELECT_REG) & ~GPIO_50, COMCERTO_GPIO_EXT_PIN_SELECT_REG);
++				writel( readl(COMCERTO_GPIO_EXT_OE_REG) & ~GPIO_50, COMCERTO_GPIO_EXT_OE_REG);
++				writel(readl(COMCERTO_GPIO_EXT_PIN_SELECT_REG) | GPIO_50, COMCERTO_GPIO_EXT_PIN_SELECT_REG);
++
+ 			}else{
+ 				writel(readl(COMCERTO_GPIO_EXT_OUTPUT_REG) & ~GPIO_50, COMCERTO_GPIO_EXT_OUTPUT_REG);
+ 				writel( readl(COMCERTO_GPIO_EXT_OE_REG) & ~GPIO_50, COMCERTO_GPIO_EXT_OE_REG);
+-				writel(readl(COMCERTO_GPIO_EXT_OUTPUT_REG) | GPIO_50, COMCERTO_GPIO_EXT_OUTPUT_REG);
+ 				writel(readl(COMCERTO_GPIO_EXT_PIN_SELECT_REG) | GPIO_50, COMCERTO_GPIO_EXT_PIN_SELECT_REG);
++				writel(readl(COMCERTO_GPIO_EXT_OUTPUT_REG) | GPIO_50, COMCERTO_GPIO_EXT_OUTPUT_REG);
+ 			}
+ 			break;
+ 		case COMPONENT_RGMII0:
+@@ -282,19 +283,92 @@ void GPIO_reset_external_device(int block,int state)
+ 
+ static int c2000_device_init(void)
+ {
+-#if defined	(CONFIG_COMCERTO_BOOTLOADER) || (CONFIG_COMCERTO_DIAG)
++#if defined	(CONFIG_COMCERTO_BOOTLOADER) || (defined CONFIG_COMCERTO_DIAG)
+ 	u32 bootopt;
+ #endif
+ 	int clk = HAL_get_axi_clk(); // Get AXI bus freq in MHz
+ 	serial_plat.clock = clk * 1000 * 1000;
+ 	register_device(&fast_uart_device);
+ 
++        /* disable pullup for Eth PHY reset GPIOs (GPIO10 and GPIO11) */
++        writel( (readl(COMCERTO_GPIO_PAD_CONFIG9) & ~0xFFF) | (0xEBA), COMCERTO_GPIO_PAD_CONFIG9);
++
++	/* make GPIO44 to GPIO46 inputs for HW  version  */
++        writel(readl(COMCERTO_GPIO_EXT_OE_REG) | (GPIO_44 | GPIO_45 | GPIO_46), COMCERTO_GPIO_EXT_OE_REG);
++        writel(readl(COMCERTO_GPIO_EXT_OUTPUT_REG) & ~(GPIO_44 | GPIO_45 | GPIO_46), COMCERTO_GPIO_EXT_OUTPUT_REG);
++        writel(readl(COMCERTO_GPIO_EXT_PIN_SELECT_REG) | (GPIO_44 | GPIO_45 | GPIO_46), COMCERTO_GPIO_EXT_PIN_SELECT_REG);
++
++	/* make GPIO47 & GPIO48 output for ledboard gpios */
++        writel(readl(COMCERTO_GPIO_EXT_OE_REG) & ~(GPIO_47 | GPIO_48),COMCERTO_GPIO_EXT_OE_REG);
++        writel(readl(COMCERTO_GPIO_EXT_OUTPUT_REG) & ~(GPIO_47 | GPIO_48),COMCERTO_GPIO_EXT_OUTPUT_REG);
++        writel(readl(COMCERTO_GPIO_EXT_PIN_SELECT_REG) | (GPIO_47 | GPIO_48),COMCERTO_GPIO_EXT_PIN_SELECT_REG);
++
++	/* make GPIO49 input for push button */
++        writel(readl(COMCERTO_GPIO_EXT_OE_REG) | (GPIO_49),COMCERTO_GPIO_EXT_OE_REG);
++        writel(readl(COMCERTO_GPIO_EXT_OUTPUT_REG) & ~(GPIO_49),COMCERTO_GPIO_EXT_OUTPUT_REG);
++        writel(readl(COMCERTO_GPIO_EXT_PIN_SELECT_REG) | (GPIO_49),COMCERTO_GPIO_EXT_PIN_SELECT_REG);
++
++	/* make GPIO56 output for fscale */
++        writel(readl(COMCERTO_GPIO_EXT_OE_REG) & ~(GPIO_56),COMCERTO_GPIO_EXT_OE_REG);
++        writel(readl(COMCERTO_GPIO_EXT_OUTPUT_REG) & ~(GPIO_56),COMCERTO_GPIO_EXT_OUTPUT_REG);
++        writel(readl(COMCERTO_GPIO_EXT_PIN_SELECT_REG) | (GPIO_56),COMCERTO_GPIO_EXT_PIN_SELECT_REG);
++
++	/* make GPIO04, GPIO05, GPIO06, GPIO07, GPIO12, GPIO13, GPIO14,GPIO15  outputas unused */
++	writel(readl(COMCERTO_GPIO_PIN_SELECT_REG) & ~((GPIO_4 << 4)
++		|| (GPIO_4 << 5) || (GPIO_5 << 5) || (GPIO_5 << 6) || (GPIO_6 << 6) ||
++		(GPIO_6 << 7) || (GPIO_7 << 7) || (GPIO_7 << 8) || (GPIO_12 << 12) ||
++		(GPIO_12 << 13) || (GPIO_13 << 13) || (GPIO_13 << 14) || (GPIO_14 << 14) ||
++		(GPIO_14 << 15) || (GPIO_15 << 15) || (GPIO_15 << 16)),
++		COMCERTO_GPIO_PIN_SELECT_REG);
++	writel(readl(COMCERTO_GPIO_OE_REG) | (GPIO_4 | GPIO_5 |
++		GPIO_6 | GPIO_7 | GPIO_12 | GPIO_13 | GPIO_14 | GPIO_15),
++		COMCERTO_GPIO_OE_REG);
++	writel(readl(COMCERTO_GPIO_OUTPUT_REG) & ~(GPIO_4 | GPIO_5 |
++		GPIO_6 | GPIO_7 | GPIO_12 | GPIO_13 | GPIO_14 | GPIO_15),
++		COMCERTO_GPIO_OUTPUT_REG);
++
++        /* make GPIO51 and GPIO52 inputs for temp sensors */
++        writel( readl(COMCERTO_GPIO_EXT_OE_REG) | (GPIO_51 | GPIO_52), COMCERTO_GPIO_EXT_OE_REG);
++        writel(readl(COMCERTO_GPIO_EXT_OUTPUT_REG) & ~(GPIO_51 | GPIO_52), COMCERTO_GPIO_EXT_OUTPUT_REG);
++        writel(readl(COMCERTO_GPIO_EXT_PIN_SELECT_REG) | (GPIO_51 | GPIO_52), COMCERTO_GPIO_EXT_PIN_SELECT_REG);
++
+ 	/* put all devices into reset to override default hardware levels of signalls */
+ 	GPIO_reset_external_device(COMPONENT_PCIE0,1);
+ 	GPIO_reset_external_device(COMPONENT_PCIE1,1);
+ 	GPIO_reset_external_device(COMPONENT_USB_HUB,1);
+ 	GPIO_reset_external_device(COMPONENT_RGMII0,1);
+ 	GPIO_reset_external_device(COMPONENT_RGMII1,1);
++ 
++	/* this section solves bug 6315 and bug 6321 */
++	/* pad config registers, drive strengths, slew rates */
++	writel(0x24924924, 0x90470100);
++	writel(0x29a6cb25, 0x90470104);
++	writel(0x2492cb24, 0x90470108);
++	writel(0x20821861, 0x9047010c);	/* gem0 x3 */
++	writel(0x20821861, 0x90470110);	/* gem1 x3 */
++	writel(0x24924924, 0x90470114);
++	writel(0x2483c8a4, 0x90470118);
++	writel(0x34f3cf3c, 0x9047011c);
++	writel(0x2cb24924, 0x90470120);
++	writel(0x24924820, 0x90470124);
++	writel(0x2cb3aea4, 0x90470128);	/* i2c drive x2 */
++	writel(0x24ebaebe, 0x9047012c);	/* reserved fields */
++	writel(0x39f6cb21, 0x90470130);
++	writel(0x24b24d2d, 0x90470134);
++	writel(0x0090d924, 0x90470138);
++
++	/* misc ctrl register */
++	writel(0x33332010, 0x90470034);
++
++	/* clock & reset registri */
++	writel(0x00000033, 0x904b000c);
++	writel(0x00000010, 0x904B0054);
++	writel(0x0000001c, 0x904b0058);
++	writel(0x00000001, 0x904b00a8);
++	writel(0x00000000, 0x904B00b0);
++	writel(0x00000001, 0x904B00b8);
++	writel(0x00000001, 0x904B00e8);
++	writel(0x00000004, 0x904B0120);
+ 
+ #ifdef CONFIG_I2C_C2K
+ 	i2c_register_board_info(0, i2c_devices, ARRAY_SIZE(i2c_devices));
+@@ -354,7 +428,7 @@ static int c2000_device_init(void)
+ 
+ 	register_device(&sdram_dev);
+ 
+-#if defined	(CONFIG_COMCERTO_BOOTLOADER) || (CONFIG_COMCERTO_DIAG)
++#if defined	(CONFIG_COMCERTO_BOOTLOADER) || (defined CONFIG_COMCERTO_DIAG)
+ 	armlinux_add_dram(&sdram_dev);
+ 	armlinux_set_bootparams((void *)0x100);
+ 	armlinux_set_architecture(MACH_TYPE_COMCERTO);
+@@ -420,6 +494,8 @@ int c2000_eth_board_init(int gemac_port)
+                 GPIO_reset_external_device(COMPONENT_RGMII1,0);
+                 udelay(10000); //here delay 1s to give switch a chance to init.
+ 	}
++
++    return 0;
+ }
+ 
+ device_initcall(c2000_device_init);
+diff --git a/arch/arm/configs/comcerto-boxv2_nand_uloader_defconfig b/arch/arm/configs/comcerto-boxv2_nand_uloader_defconfig
+index 9ee4566..68e6465 100644
+--- a/arch/arm/configs/comcerto-boxv2_nand_uloader_defconfig
++++ b/arch/arm/configs/comcerto-boxv2_nand_uloader_defconfig
+@@ -1,7 +1,7 @@
+ #
+ # Automatically generated make config: don't edit
+ # Linux/arm 2011.06.0 Barebox Configuration
+-# Sun Oct 30 23:05:05 2016
++# Wed Mar 15 11:31:22 2017
+ #
+ # CONFIG_BOARD_LINKER_SCRIPT is not set
+ CONFIG_GENERIC_LINKER_SCRIPT=y
+@@ -31,6 +31,8 @@ CONFIG_BOARDINFO="Mindspeed C2000"
+ # SoC Selection
+ #
+ CONFIG_COMCERTO_C2000=y
++# CONFIG_COMCERTO_ENABLE_ULOADER_YMODEM_PROMPT is not set
++# CONFIG_SERIAL_PROMPTS is not set
+ 
+ #
+ # Board Selection
+@@ -53,8 +54,6 @@ CONFIG_COMCERTO_PLL=y
+ CONFIG_COMCERTO_DDR=y
+ CONFIG_COMCERTO_NAND=y
+ # CONFIG_COMCERTO_DDR_TRAINING is not set
+-# CONFIG_COMCERTO_ENABLE_ULOADER_YMODEM_PROMPT is not set
+-CONFIG_COMCERTO_SECUREBOOT=y
+ # CONFIG_SECUREBOOT_TEST is not set
+ CONFIG_BOOTB=y
+ # CONFIG_M86201 is not set
+@@ -113,21 +112,22 @@ CONFIG_ENVIRONMENT_VARIABLES=y
+ # memory layout                 
+ #
+ CONFIG_HAVE_CONFIGURABLE_TEXT_BASE=y
+-CONFIG_TEXT_BASE=0x83000000
++CONFIG_TEXT_BASE=0x01100000
+ CONFIG_HAVE_CONFIGURABLE_MEMORY_LAYOUT=y
+ # CONFIG_MEMORY_LAYOUT_DEFAULT is not set
+ CONFIG_MEMORY_LAYOUT_FIXED=y
+-CONFIG_STACK_BASE=0x000C000
+-CONFIG_STACK_SIZE=0x1000
+-CONFIG_MALLOC_BASE=0x000D000
+-CONFIG_MALLOC_SIZE=0x3000
++CONFIG_BOARDINIT_TEXT_BASE=0x83000000
++CONFIG_STACK_BASE=0x01120000
++CONFIG_STACK_SIZE=0x4000
++CONFIG_MALLOC_BASE=0x01124000
++CONFIG_MALLOC_SIZE=0x30000000
+ # CONFIG_BROKEN is not set
+ # CONFIG_EXPERIMENTAL is not set
+ CONFIG_MALLOC_DLMALLOC=y
+ # CONFIG_MALLOC_DUMMY is not set
+ # CONFIG_KALLSYMS is not set
+ CONFIG_PROMPT="uLoader >"
+-CONFIG_BAUDRATE=115200
++CONFIG_BAUDRATE=921600
+ CONFIG_SIMPLE_READLINE=y
+ # CONFIG_LONGHELP is not set
+ CONFIG_CBSIZE=1024
+@@ -196,7 +196,7 @@ CONFIG_NAND_COMCERTO=y
+ # CONFIG_MTD_NAND_VERIFY_WRITE is not set
+ # CONFIG_MTD_NAND_ECC_SMC is not set
+ CONFIG_MTD_NAND_IDS=y
+-# CONFIG_UBI is not set
++CONFIG_UBI=y
+ # CONFIG_ATA is not set
+ # CONFIG_USB is not set
+ # CONFIG_USB_GADGET is not set
+@@ -227,6 +227,7 @@ CONFIG_DRIVER_SPACC=y
+ # CONFIG_FS_RAMFS is not set
+ # CONFIG_FS_DEVFS is not set
+ # CONFIG_FS_FAT is not set
++CONFIG_PARTITION_NEED_MTD=y
+ CONFIG_CRC32=y
+ # CONFIG_DIGEST is not set
+ # CONFIG_GENERIC_FIND_NEXT_BIT is not set
+diff --git a/arch/arm/configs/comcerto-boxv2_nand_ymodem_uloader_defconfig b/arch/arm/configs/comcerto-boxv2_nand_ymodem_uloader_defconfig
+index 408a016..c615465 100644
+--- a/arch/arm/configs/comcerto-boxv2_nand_ymodem_uloader_defconfig
++++ b/arch/arm/configs/comcerto-boxv2_nand_ymodem_uloader_defconfig
+@@ -1,7 +1,7 @@
+ #
+ # Automatically generated make config: don't edit
+ # Linux/arm 2011.06.0 Barebox Configuration
+-# Sun Oct 30 23:23:39 2016
++# Wed Mar 15 11:35:59 2017
+ #
+ # CONFIG_BOARD_LINKER_SCRIPT is not set
+ CONFIG_GENERIC_LINKER_SCRIPT=y
+@@ -112,21 +112,22 @@ CONFIG_ENVIRONMENT_VARIABLES=y
+ # memory layout                 
+ #
+ CONFIG_HAVE_CONFIGURABLE_TEXT_BASE=y
+-CONFIG_TEXT_BASE=0x83000000
++CONFIG_TEXT_BASE=0x01100000
+ CONFIG_HAVE_CONFIGURABLE_MEMORY_LAYOUT=y
+ # CONFIG_MEMORY_LAYOUT_DEFAULT is not set
+ CONFIG_MEMORY_LAYOUT_FIXED=y
+-CONFIG_STACK_BASE=0x8300B000
+-CONFIG_STACK_SIZE=0x1000
+-CONFIG_MALLOC_BASE=0x8300C000
+-CONFIG_MALLOC_SIZE=0x3000
++CONFIG_BOARDINIT_TEXT_BASE=0x83000000
++CONFIG_STACK_BASE=0x01120000
++CONFIG_STACK_SIZE=0x4000
++CONFIG_MALLOC_BASE=0x01124000
++CONFIG_MALLOC_SIZE=0x30000000
+ # CONFIG_BROKEN is not set
+ # CONFIG_EXPERIMENTAL is not set
+ CONFIG_MALLOC_DLMALLOC=y
+ # CONFIG_MALLOC_DUMMY is not set
+ # CONFIG_KALLSYMS is not set
+ CONFIG_PROMPT="uLoader >"
+-CONFIG_BAUDRATE=115200
++CONFIG_BAUDRATE=921600
+ CONFIG_SIMPLE_READLINE=y
+ # CONFIG_LONGHELP is not set
+ CONFIG_CBSIZE=1024
+@@ -138,6 +139,7 @@ CONFIG_SHELL_NONE=y
+ # CONFIG_MEM_SIZE is not set
+ # CONFIG_MENU is not set
+ # CONFIG_PASSWORD is not set
++CONFIG_DYNAMIC_CRC_TABLE=y
+ # CONFIG_ERRNO_MESSAGES is not set
+ # CONFIG_TIMESTAMP is not set
+ CONFIG_CONSOLE_FULL=y
+@@ -155,7 +157,7 @@ CONFIG_DEFAULT_ENVIRONMENT_PATH=""
+ # CONFIG_ENABLE_FLASH_NOISE is not set
+ # CONFIG_ENABLE_PARTITION_NOISE is not set
+ # CONFIG_ENABLE_DEVICE_NOISE is not set
+-CONFIG_CMD_LOADY=y
++CONFIG_LOADY=y
+ # CONFIG_NET is not set
+ 
+ #
+@@ -196,7 +198,8 @@ CONFIG_NAND_COMCERTO=y
+ # CONFIG_MTD_NAND_VERIFY_WRITE is not set
+ # CONFIG_MTD_NAND_ECC_SMC is not set
+ CONFIG_MTD_NAND_IDS=y
++# CONFIG_SERIAL_PROMPTS is not set
+-# CONFIG_UBI is not set
++CONFIG_UBI=y
+ # CONFIG_ATA is not set
+ # CONFIG_USB is not set
+ # CONFIG_USB_GADGET is not set
+@@ -227,6 +229,8 @@ CONFIG_DRIVER_SPACC=y
+ # CONFIG_FS_RAMFS is not set
+ # CONFIG_FS_DEVFS is not set
+ # CONFIG_FS_FAT is not set
++CONFIG_PARTITION_NEED_MTD=y
++CONFIG_CRC32=y
+ # CONFIG_DIGEST is not set
+ # CONFIG_GENERIC_FIND_NEXT_BIT is not set
+ # CONFIG_PROCESS_ESCAPE_SEQUENCE is not set
+diff --git a/arch/arm/cpu/Makefile b/arch/arm/cpu/Makefile
+index e30ae1c..e993959 100644
+--- a/arch/arm/cpu/Makefile
++++ b/arch/arm/cpu/Makefile
+@@ -1,16 +1,14 @@
+ obj-y += cpu.o
+ obj-$(CONFIG_ARM_EXCEPTIONS) += exceptions.o
+ obj-$(CONFIG_ARM_EXCEPTIONS) += interrupts.o
+-obj-y += start.o
+ 
+ #
+ # Any variants can be called as start-armxyz.S
+ #
+ obj-$(CONFIG_CMD_ARM_CPUINFO) += cpuinfo.o
+-obj-$(CONFIG_MMU) += mmu.o
++
+ obj-$(CONFIG_CPU_32v4T) += cache-armv4.o
+ obj-$(CONFIG_CPU_32v5) += cache-armv5.o
+ obj-$(CONFIG_CPU_32v6) += cache-armv6.o
+ obj-$(CONFIG_CPU_32v7) += cache-armv7.o
+ obj-$(CONFIG_CACHE_L2X0) += cache-l2x0.o
+-
+diff --git a/arch/arm/cpu/start.c b/arch/arm/cpu/start.c
+index 2d0b7fd..50a1632 100644
+--- a/arch/arm/cpu/start.c
++++ b/arch/arm/cpu/start.c
+@@ -27,19 +27,13 @@
+ #include <asm-generic/memory_layout.h>
+ #include <asm/sections.h>
+ 
++#include <puff.h>
++
+ void __naked __section(.text_entry) exception_vectors(void)
+ {
+ 	__asm__ __volatile__ (
+ 		"b reset\n"				/* reset */
+-#ifdef CONFIG_ARM_EXCEPTIONS
+-		"ldr pc, =undefined_instruction\n"	/* undefined instruction */
+-		"ldr pc, =software_interrupt\n"		/* software interrupt (SWI) */
+-		"ldr pc, =prefetch_abort\n"		/* prefetch abort */
+-		"ldr pc, =data_abort\n"			/* data abort */
+-		"ldr pc, =not_used\n"			/* (reserved) */
+-		"ldr pc, =irq\n"			/* irq (interrupt) */
+-		"ldr pc, =fiq\n"			/* fiq (fast interrupt) */
+-#else
++
+ 		"1: bne 1b\n"				/* undefined instruction */
+ 		"1: bne 1b\n"				/* software interrupt (SWI) */
+ 		"1: bne 1b\n"				/* prefetch abort */
+@@ -47,13 +41,13 @@ void __naked __section(.text_entry) exception_vectors(void)
+ 		"1: bne 1b\n"				/* (reserved) */
+ 		"1: bne 1b\n"				/* irq (interrupt) */
+ 		"1: bne 1b\n"				/* fiq (fast interrupt) */
+-#endif
++
+ 		".word 0x65726162\n"			/* 'bare' */
+ 		".word 0x00786f62\n"			/* 'box' */
+ 		".word _text\n"				/* text base. If copied there,
+ 							 * barebox can skip relocation
+ 							 */
+-		".word _barebox_image_size\n"		/* image size to copy */
++		".word _boardinit_image_size\n"		/* image size to copy */
+ #ifdef CONFIG_M86201
+ 		".word 0x0000000C\n"      		/* C2K Part Number (initialized with 0x0000000C) */
+ #elif defined CONFIG_M86202
+@@ -151,23 +145,35 @@ void __naked __bare_init board_init_lowlevel_return(void)
+ 	 */
+ 	__asm__ __volatile__("1: adr %0, 1b":"=r"(addr));
+ 
+-	/* Setup the stack */
+-	r = STACK_BASE + STACK_SIZE - 16;
+-	__asm__ __volatile__("mov sp, %0" : : "r"(r));
++    // Get start of compressed data. */
++    addr += _end - (char *)board_init_lowlevel_return;
+ 
+-	/* Get start of binary image */
+-	addr -= (uint32_t)&board_init_lowlevel_return - TEXT_BASE;
++    {
++        unsigned long src_len = *(unsigned *)addr;
++        unsigned char *src = (unsigned char *)(addr+4);
++        unsigned char *dst = (unsigned char *)TEXT_BASE;
++        unsigned long dst_len = 1024*1024;
++	    void (*func)(void);
++        unsigned ret, sp;
++        
++        ret = puff(dst, &dst_len, src, &src_len);
+ 
+-	/* relocate to link address if necessary */
+-	if (addr != TEXT_BASE)
+-		memcpy((void *)TEXT_BASE, (void *)addr,
+-				(unsigned int)&__bss_start - TEXT_BASE);
++        if (ret != 0) for(;;);
+ 
+-	/* clear bss */
+-	memset(__bss_start, 0, __bss_stop - __bss_start);
++        // icache flush
++        asm volatile("mcr p15, 0, %0, c7, c5, 0" : : "r" (0));
++        
++        __asm__ __volatile__ (
++            "bl __mmu_cache_flush;"
++            :
++            :
++            : "r0", "r1", "r2", "r3", "r6", "r10", "r12", "cc", "memory"
++        );
+ 
+-	/* call start_barebox with its absolute address */
+-	r = (unsigned int)&start_barebox;
+-	__asm__ __volatile__("mov pc, %0" : : "r"(r));
++        sp = STACK_BASE + STACK_SIZE - 32;
++    	__asm__ __volatile__("mov sp, %0" : : "r"(sp));
++ 
++        func = (void *)TEXT_BASE;
++        func();
++    }
+ }
+-
+diff --git a/arch/arm/lib/barebox.lds.S b/arch/arm/lib/barebox.lds.S
+index 81a9123..181edcc 100644
+--- a/arch/arm/lib/barebox.lds.S
++++ b/arch/arm/lib/barebox.lds.S
+@@ -26,25 +26,17 @@
+ 
+ OUTPUT_FORMAT("elf32-littlearm", "elf32-littlearm", "elf32-littlearm")
+ OUTPUT_ARCH(arm)
+-ENTRY(exception_vectors)
++ENTRY(barebox_entry)
+ SECTIONS
+ {
+ 	. = TEXT_BASE;
+ 
+-	PRE_IMAGE
+-
+ 	. = ALIGN(4);
+ 	.text      :
+ 	{
+ 		_stext = .;
+ 		_text = .;
+ 		*(.text_entry*)
+-#ifdef CONFIG_ARCH_EP93XX
+-		/* the EP93xx expects to find the pattern 'CRUS' at 0x1000 */
+-	  . = 0x1000;
+-	  LONG(0x53555243) /* 'CRUS' */
+-#endif
+-		*(.text_bare_init*)
+ 		*(.text*)
+ 	}
+ 
+diff --git a/arch/arm/lib/bootb.c b/arch/arm/lib/bootb.c
+index 6c44e8d..738e8b5 100644
+--- a/arch/arm/lib/bootb.c
++++ b/arch/arm/lib/bootb.c
+@@ -8,10 +8,32 @@
+ #include <mach/comcerto_spi.h>
+ #include <mach/gpio.h>
+ #include <asm/io.h>
++#include <fast_uart.h>
++
++#ifdef CONFIG_UBI
++#include <ioctl.h>
++#include <linux/err.h>
++#include <linux/mtd/mtd-abi.h>
++#include <linux/mtd/ubi.h>
++#endif
++
++#include <malloc.h>
++#include <fcntl.h>
++#include <nand.h>
++
++#include <gpio.h>
++
++#ifdef CONFIG_COMCERTO_SECUREBOOT
++#include <mach/image.h>
++#endif
+ 
+ #define ULOADER_PART_SIZE 0x20000 /* 128 KB */
+-#define BAREBOX_PART_SIZE 0x80000 /* 512 KB */
+-#define BAREBOX_LODING_ADDR (COMCERTO_AXI_DDR_BASE + 0x1000000)
++
++#define UBOOT_MAX_SIZE 0xC0000 /* 768 KB */
++
++#define UBOOT_PART_OFS (1024*1024)
++
++#define BAREBOX_LOADING_ADDR (COMCERTO_AXI_DDR_BASE + 0x1000000)
+ 
+ #ifdef CONFIG_COMCERTO_NAND_ULOADER
+ extern int read_nand(ulong src, ulong offset, ulong count);
+@@ -26,13 +48,15 @@
+ extern ulong load_serial_ymodem(void);
+ #endif
+ 
+-#ifdef CONFIG_COMCERTO_ENABLE_ULOADER_YMODEM_PROMPT
+-static int bb_timeout(int timeout)
++#ifndef CONFIG_COMCERTO_ENABLE_ULOADER_YMODEM_PROMPT
++unsigned g_factory_restore = 0;
++#endif
++
++static int get_serial_char(int timeout)
+ {
+ 	int ret = 1;
+ 	int countdown;
+ 	uint64_t start, second;
+-	timeout = 3;
+ 
+ 	start = get_time_ns();
+ 	second = start;
+@@ -60,7 +84,6 @@
+ 
+ 	return ret;
+ }
+-#endif
+ 
+ static void bb_go(void *addr)
+ {
+@@ -73,6 +96,12 @@
+ 	func = addr;
+ 
+ 	shutdown_barebox();
++    
++#ifndef CONFIG_COMCERTO_ENABLE_ULOADER_YMODEM_PROMPT
++    // the original SDRAM malloc base, which we don't use anyway.
++    *(unsigned *)0x8300C000 = g_factory_restore;
++#endif
++
+ 	func();
+ 
+ 	/*
+@@ -83,93 +112,320 @@
+ 	while (1);
+ }
+ 
+-
+-static int do_bootb_barebox(void)
++static void bb_start_uboot(void)
+ {
+-#ifndef CONFIG_COMCERTO_NAND_ULOADER
+-	volatile u32 	*src 	= (u32 *)(COMCERTO_AXI_EXP_BASE + ULOADER_PART_SIZE); /* Start of NOR + uLdr size(128K) */
+-	volatile u32 	*dst 	= (u32*)BAREBOX_LODING_ADDR;
+-#endif
+-	int 		count 	= BAREBOX_PART_SIZE; /* 512k for Barebox */
+-
+ #ifdef CONFIG_COMCERTO_SECUREBOOT
+ 	void * boot_addr;
++
++    boot_addr = (void *) verify_and_authenticate_boot_image((u8 *)BAREBOX_LOADING_ADDR);
++    if (boot_addr != NULL)
++        bb_go((void*) boot_addr);
++
++    printf("\nImage validation error\n");
++#else
++    bb_go((void*)BAREBOX_LOADING_ADDR);
+ #endif
+-	u32 bootopt;
++}
++
++extern struct fast_uart_plat serial_plat;
++
++#ifdef CONFIG_SERIAL_PROMPTS
++static unsigned char led_cmd_black[] = {
++  0x02, 0x00, 0x04, 0xff, 0xff, 0xff, 0x07, 0x08, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03
++};
++#endif
++
++static unsigned char led_cmd_breathing[] = {
++  0x02, 0x00, 0x10, 0x02, 0x10, 0x03, 0xff, 0xff, 0xff, 0x2a, 0x01, 0x03
++};
++
++static unsigned char led_cmd_spinning[] = {
++  0x02, 0x00, 0x10, 0x02, 0x04, 0xff, 0xff, 0xff, 0x07, 0x08, 0x03
++};
++
++static unsigned char led_anim6[] = {0x02, 0x00, 0x10, 0x02, 0x06, 0xff, 0xff, 0xff, 0x03};
++
++static unsigned char led_ledmask[] = {0x02, 0x00, 0x06, 0x3f, 0x03};
++
++static unsigned char ledboard_nand_marker = 0xff;
++
++static void do_send_leds(size_t mapbase, unsigned char *cmd, size_t len)
++{
++    int i;
++
++    if (ledboard_nand_marker != 0)
++        return;
++
++    for (i=0; i<len; i++)
++        c2k_putc(mapbase, cmd[i]);
++}
++
++#define SEND_LEDS(cmd) do_send_leds(UART_BASEADDR_LED, cmd, sizeof(cmd))
++
++void init_leds(void)
++{
++    size_t mapbase = UART_BASEADDR_LED;
++    u32 clk = serial_plat.clock;
++    int i;
++    
++    // Uboot complains about nand reads that are not page-aligned.
++    // And I'm not sure about memory reads in uloader that are not word-aligned.
++
++    if (read_nand(BAREBOX_LOADING_ADDR, 16*1024*1024 - 64*1024, 64*1024) != 0) {
++        printk("error reading ledboard marker\n");
++        return;
++    }
++
++    ledboard_nand_marker = (*(unsigned *)(BAREBOX_LOADING_ADDR + 64*1024 - 4)) >> 24;
++    printk("Ledboard marker: %02x\n", ledboard_nand_marker);
++
++    if (ledboard_nand_marker != 0)
++        return;
++
++    c2k_init_uart_led();
++
++    c2k_setbrg(mapbase, clk, 57600);
++}
++
++#ifndef CONFIG_COMCERTO_ENABLE_ULOADER_YMODEM_PROMPT
++static int read_uboot_from_ubi(u32 addr, u32 count)
++{
++    int ret;
++
++    do {
++        // to attach a mtd part as ubi in uloader shell: 
++        // addpart /dev/nand0 256M@0x00600000(rootR)
++        // #nand -a /dev/nand0.rootR          (not needed apparently)
++        // ubiattach /dev/nand0.rootR
++
++        int ubinum = 0;
++        struct cdev *cdev;
++        struct mtd_info_user mtduser;
++        struct ubi_volume_desc *ubi;
++        
++        #define NAND_DEV_NAME "nand0"
++
++        #define UBI_PART_NAME "boot"         // this is just used to create the device node
++        #define UBI_PART_OFS (16*1024*1024)  // in bytes, see mtdparts
++        #define UBI_PART_SIZE 256*1024*1024
++
++        #define UBI_VOL_NAME1 "uboot1"
++        #define UBI_VOL_NAME2 "uboot2"
++
++
++        printf("\nadding partition\n");
++
++        ret = devfs_add_partition(NAND_DEV_NAME, UBI_PART_OFS, UBI_PART_SIZE, 
++            DEVFS_PARTITION_FIXED, NAND_DEV_NAME "." UBI_PART_NAME);
++        if (ret != 0) break;
++
++
++        printf("opening nand\n");
++
++        cdev = cdev_by_name(NAND_DEV_NAME "." UBI_PART_NAME);
++        if (!cdev) { ret = -EINVAL; break; }
++
++
++        printf("getting mtd device info\n");
++
++        ret = cdev_ioctl(cdev, MEMGETINFO, &mtduser);
++        if (ret) break;
++
++
++        printf("attaching ubi device\n");
++
++        ret = ubi_attach_mtd_dev(mtduser.mtd, UBI_DEV_NUM_AUTO, 4096);
++        if (ret < 0) break;
++
++        ubinum = ret;
++
++
++        printf("opening uboot1\n");
++
++        ubi = ubi_open_volume_nm(ubinum, UBI_VOL_NAME1, UBI_READONLY);
++        if (IS_ERR(ubi)) {
++
++            printf("read error. trying uboot2\n");
++            ubi = ubi_open_volume_nm(ubinum, UBI_VOL_NAME2, UBI_READONLY);
++
++            if (IS_ERR(ubi)) { ret = PTR_ERR(ubi); break; }
++        }
++
++        printf("reading ubi data\n");
++
++        ret = ubi_read(ubi, 0, (void *)addr, 0, count);
++        if (ret != 0) break;
++        
++        ubi_close_volume(ubi);
++        
++        ubi_detach_mtd_dev(mtduser.mtd, 0);
++        
++        printf("\nubi read complete\n");
++    } while (0);
++    
++    if (ret) printf("\nubi read error %d\n", ret);
++
++    return ret;
++}
++
++static int gpio_button_pressed(void)
++{
++    const int leds_and_secs = 6; // we have 6 leds, so wait 6 secs
++    const int slices_per_sec = 4;
++    const int usec_per_slice = 1000000 / slices_per_sec;
++    const int spin_ofs = 2;
++
++    int pressed = 1;
++    int sec;
++
++    gpio_direction_input(49);
++
++    // User keeps button pressed for factory_secs seconds to initiate restore.
++    // To avoid a random gpio value flip, we count how many 250ms consecutive
++    // slices the user kept the button pressed. A slice is considered pressed 
++    // if 75% of the time the value says 'pressed'. We query every 10ms (so 25
++    // queries per slice).
++    
++    for (sec = 0; sec < leds_and_secs; sec++) {
++        int slice;
++
++        for (slice = 0; slice < slices_per_sec; slice++) {
++            int usec = 0;
++            int cnt = 0;
++            int sum = 0;
++
++            while (usec < usec_per_slice) {
++                sum += !gpio_get_value(49); // gpio is active-low
++                cnt += 1;
++
++                udelay(10*1000);
++                usec += 10*1000;
++            }
++
++            printf("%d+%d: %d / %d\n", sec, slice, sum, cnt);
++
++            if (sum < cnt * 75 / 100) {
++                pressed = 0;
++                break;
++            }
++
++            if (slice == 0) {
++                int i;
++                int mask = 0;
++
++                if (sec == 0)
++                    SEND_LEDS(led_anim6);
++                
++                for (i=0; i<=sec; i++)
++                    mask |= 1 << ((i+spin_ofs) % 6);
++
++                led_ledmask[3] = mask;
++                SEND_LEDS(led_ledmask);
++            }
++        }
++
++        if (!pressed) break;
++    }
++
++    if (pressed) {
++        int finsec;
++
++        for (finsec = 0; finsec < leds_and_secs; finsec++) {
++            int i;
++            int mask = 0;
++
++            for (i=0; i<=finsec; i++)
++                mask |= 1 << ((i+spin_ofs) % 6);
++
++            led_ledmask[3] = mask;
++            SEND_LEDS(led_ledmask);
++            udelay(100*1000);
++        }
++    }
++
++    return pressed;
++}
++#endif // CONFIG_COMCERTO_ENABLE_ULOADER_YMODEM_PROMPT
++
++static int do_bootb_barebox(void)
++{
+ #ifdef CONFIG_COMCERTO_ENABLE_ULOADER_YMODEM_PROMPT
++
++    printf("WAITING FOR PRODUCTION_UBOOT\n");
++    dst_ddr = 1;
++    dst_ddr_address = 0x01000000;
++    load_serial_ymodem();
++    bb_go((void *)0x01000000);
++    return 0;
++
++#else // CONFIG_COMCERTO_ENABLE_ULOADER_YMODEM_PROMPT
++
++    int count = UBOOT_MAX_SIZE;
++
+ 	int timeout = 3;
+ 
+-	if(bb_timeout(timeout))
+-	{
+-		dst_ddr = 1;
+-		dst_ddr_address = 0x01000000;
+-		load_serial_ymodem();
+-		bb_go(0x01000000);
+-		return 0;
+-	}
+-#endif
+-	bootopt = ((readl(COMCERTO_GPIO_SYSTEM_CONFIG) >>  BOOTSTRAP_BOOT_OPT_SHIFT) & BOOTSTRAP_BOOT_OPT_MASK);
++    static const char menu[] = 
++        "\nPress to skip down:"
++        "\n-%c Button check"
++        "\n-%c Breathing leds"
++        "\n-%c Run from UBI"
++        "\n-%c Run from NAND"
++        #ifdef CONFIG_SERIAL_PROMPTS
++        "\n-  Shell"
++        #endif
++        "\n";
++    
++    init_leds();
+ 
+-#ifdef CONFIG_COMCERTO_NAND_ULOADER
+-	/* this option is used when uloader is in NOR flash or I2C EEPROM and
+-	barebox is in NAND */
+-	printf("\nCopying Barebox from NAND Flash(bootopt=%d)\n", bootopt);
+-	read_nand(BAREBOX_LODING_ADDR, 0x0, count);
++#ifdef CONFIG_SERIAL_PROMPTS
++    printf(menu, '>', ' ', ' ', ' ');
++	if(!get_serial_char(timeout))
++#endif   
++    {
++        if (gpio_button_pressed()) {
++            printf("Factory reset flag enabled\n");
++            g_factory_restore = 1;
++        }
++    }
++
++#ifdef CONFIG_SERIAL_PROMPTS
++    printf(menu, ' ', '>', ' ', ' ');
++	if(!get_serial_char(timeout))
++        SEND_LEDS(led_cmd_black);
+ #else
++    SEND_LEDS(led_cmd_breathing);
++#endif   
+ 
+-	switch(bootopt){
+-		case BOOT_LS_SPI:
+-			//With SPI boot, the barebox will also reside in SPI flash
+-			printf("\nCopying Barebox from SPI Flash(bootopt=%d)\n", bootopt);
+-#ifdef CONFIG_SPI
+-			if (spi_copy_read((char *)SPI_FLASH_BAREBOX_DEV_NAME, (ulong)dst, ULOADER_PART_SIZE, count) < 0)
+-#endif
+-			{
+-				printf("SPI flash barebox partition read failed:\n");
+-				return -1;
+-			}
+-			break;
+-		case BOOT_HS_SPI:
+-			//With Fast SPI boot, the barebox will also reside in Fast SPI flash
+-			printf("\nCopying Barebox from Fast SPI Flash(bootopt=%d)\n", bootopt);
+-#ifdef CONFIG_SPI
+-			if (spi_copy_read(FAST_SPI_FLASH_BAREBOX_DEV_NAME, (ulong)dst, ULOADER_PART_SIZE, count) < 0)
+-#endif
+-			{
+-				printf("Fast SPI flash barebox partition read failed:\n");
+-				return -1;
+-			}
+-			break;
+-		default:
+-			/*
+-			   -With NOR boot the barebox will be loaded from NOR flash.
+-			   -With I2C boot the barebox will be loaded either from NOR flash or NAND.
+-			   If NAND then this part of code won't be compiled as CONFIG_COMCERTO_NAND_ULOADER
+-			   will be selected.
+-			   -With other boot option like UART boot, barebox will be loaded from NOR by default
+-			 */
+-			printf("\nCopying Barebox from NOR Flash(bootopt=%d)\n", \
+-					bootopt);
+-			memcpy((void *)dst, (void *)src, count);
+-			break;
+-	}
+-#endif
++#ifdef CONFIG_SERIAL_PROMPTS
++    printf(menu, ' ', ' ', '>', ' ');
++    if (!get_serial_char(timeout)) 
++#endif // CONFIG_SERIAL_PROMPTS
++    {
++        if (read_uboot_from_ubi(BAREBOX_LOADING_ADDR, count) == 0)
++            bb_start_uboot();
++        
++        printf("\nBoot from UBI failed. Trying raw NAND\n");
++    }
+ 
+-#ifdef CONFIG_COMCERTO_SECUREBOOT
+-	boot_addr = (void *) verify_and_authenticate_boot_image((u8 *)BAREBOX_LODING_ADDR);
+-	if (boot_addr != NULL) {
+-		bb_go((void*) boot_addr);
+-	}
+-	else {
+-		printf("\nImage validation error\n");
+-		return -1;
+-	}
++#ifdef CONFIG_SERIAL_PROMPTS
++    printf(menu, ' ', ' ', ' ', '>');
++    if (!get_serial_char(timeout))
++#endif // CONFIG_SERIAL_PROMPTS
++    {
++        if (read_nand(BAREBOX_LOADING_ADDR, UBOOT_PART_OFS, count) == 0)
++            bb_start_uboot();
++
++        printf("\nBooting from raw NAND failed.\n");
++    }
++
++#ifdef CONFIG_SERIAL_PROMPTS
++	return 0;  // continues to shell
+ #else
+-	bb_go((void*)BAREBOX_LODING_ADDR);
+-#endif
++	return -1; // halts
++#endif // CONFIG_SERIAL_PROMPTS
+ 
+-	return -1;
++#endif // CONFIG_COMCERTO_ENABLE_ULOADER_YMODEM_PROMPT
+ }
+ 
+ late_initcall(do_bootb_barebox);
+-
+diff --git a/arch/arm/mach-comcerto/Kconfig b/arch/arm/mach-comcerto/Kconfig
+index fe4c14a..700d9e0 100644
+--- a/arch/arm/mach-comcerto/Kconfig
++++ b/arch/arm/mach-comcerto/Kconfig
+@@ -26,6 +26,10 @@ endmenu
+ config COMCERTO_ENABLE_ULOADER_YMODEM_PROMPT
+         bool "COMCERTO_ENABLE_ULOADER_YMODEM_PROMPT"
+ 
++config SERIAL_PROMPTS
++        bool "Serial prompts (for dev/testing)"
++        default n
++
+ menu "Board Selection"
+ 
+ choice
+@@ -41,6 +45,7 @@ config  MACH_COMCERTO_C2K_MFCNEVM
+ 
+ config  MACH_COMCERTO_C2K_BOXV2
+         bool "BOXv2"
++        select COMCERTO_GPIO
+         help
+ 
+ config  MACH_COMCERTO_C2K_ASIC
+@@ -112,7 +117,7 @@ config COMCERTO_NAND_ULOADER
+ 	select COMCERTO_DDR if !MACH_COMCERTO_C2K_RTSM
+ 	select COMCERTO_NAND if !MACH_COMCERTO_C2K_RTSM
+ #       select COMCERTO_DDR_ECC if !MACH_COMCERTO_C2K_RTSM
+-	select CMD_LOADY if COMCERTO_ENABLE_ULOADER_YMODEM_PROMPT
++	select LOADY if COMCERTO_ENABLE_ULOADER_YMODEM_PROMPT
+ 	select COMCERTO_SECUREBOOT if !COMCERTO_ENABLE_ULOADER_YMODEM_PROMPT
+ 	help
+ 
+@@ -137,6 +142,7 @@ config COMCERTO_I2C
+ 
+ config COMCERTO_GPIO
+ 	bool
++    select GENERIC_GPIO
+ 
+ config COMCERTO_DDR_TRAINING
+         bool "COMCERTO_DDR_TRAINING"
+@@ -152,6 +158,7 @@ config COMCERTO_SECUREBOOT
+ 	select DRIVER_OTP
+ 	select CRC32
+ 	select DYNAMIC_CRC_TABLE
++	select DYNAMIC_CRC16_TABLE
+ 
+ config SECUREBOOT_TEST
+ 	bool "Enable secureboot testing"
+diff --git a/arch/arm/mach-comcerto/Makefile b/arch/arm/mach-comcerto/Makefile
+index 5b728ea..825a338 100644
+--- a/arch/arm/mach-comcerto/Makefile
++++ b/arch/arm/mach-comcerto/Makefile
+@@ -1,14 +1,13 @@
+ # Object file lists.
+ 
+-obj-y := c2k_start.o clocksource.o lowlevel.o reset.o clkcore.o pad_config.o nand.o
++obj-y := clocksource.o reset.o clkcore.o nand.o
+ #ifndef CONFIG_COMCERTO_NAND_ULOADER
+ #obj-y += nor.o
+ #endif
+ obj-$(CONFIG_COMCERTO_GPIO) += gpio.o
+-obj-$(CONFIG_COMCERTO_DDR) += ddr.o
+ obj-$(CONFIG_COMCERTO_DDR_ECC) += mdma.o
+ obj-$(CONFIG_COMCERTO_SERDES) += serdes.o
+ obj-$(CONFIG_COMCERTO_NOT_BOOLOADER) += pfe.o
+ obj-$(CONFIG_COMCERTO_DDR_TRAINING) += training.o
+-obj-$(CONFIG_COMCERTO_SECUREBOOT) += ibr_wrapper.o image_parser.o secureboot_config.o secureboot.o image.o
++obj-$(CONFIG_COMCERTO_SECUREBOOT) += ibr_wrapper.o secureboot.o image.o # image_parser.o secureboot_config.o 
+ 
+diff --git a/arch/arm/mach-comcerto/clkcore.c b/arch/arm/mach-comcerto/clkcore.c
+index 8185351..002a85b 100644
+--- a/arch/arm/mach-comcerto/clkcore.c
++++ b/arch/arm/mach-comcerto/clkcore.c
+@@ -9,9 +9,7 @@
+ 
+ static inline void HAL_set_clock_divider(int clk_freq, int pll_src, u32 reg);
+ 
+-struct clock_cfg_settings *cfg_clk;
+-
+-static u32 pll_cfg_freq_table[] = {
++static const u32 pll_cfg_freq_table[] = {
+ 	[PLL_CFG_1800] = PLL_FREQ_1800,
+ 	[PLL_CFG_1600] = PLL_FREQ_1600,
+ 	[PLL_CFG_1500] = PLL_FREQ_1500,
+@@ -24,12 +22,12 @@ static u32 pll_cfg_freq_table[] = {
+ 	[PLL_CFG_2400] = PLL_FREQ_2400	
+ };
+ 
+-static u32 pll3_cfg_freq_table[] = {
++static const u32 pll3_cfg_freq_table[] = {
+ 	[PLL3_CFG_1066] = PLL_FREQ_1066,
+ 	[PLL3_CFG_800] = PLL_FREQ_800
+ };
+ 
+-static struct pll_info pll_table[] = {
++static const struct pll_info pll_table[] = {
+ #if (CFG_REFCLKFREQ == CFG_REFCLKFREQ_24)
+         [PLL_CFG_1800] = {450,  6,  0,	1},
+         [PLL_CFG_1600] = {400,  6,  0,	1},
+@@ -55,7 +53,7 @@ static struct pll_info pll_table[] = {
+ #endif
+ };
+ 
+-static struct pll3_info pll3_table[] = {
++static const struct pll3_info pll3_table[] = {
+ #if (CFG_REFCLKFREQ == CFG_REFCLKFREQ_24)
+ 	[PLL3_CFG_1066]	= {0x57, 2, 0, 0x755, 1},
+ #else
+@@ -64,7 +62,7 @@ static struct pll3_info pll3_table[] = {
+ #endif
+ };
+ 
+-struct pll_setting pll_freq_table[] = {
++static const struct pll_setting pll_freq_table[] = {
+         {PLL0_CFG_1800, PLL1_CFG_1000, PLL2_CFG_1500, PLL3_CFG_1066},
+ 	{PLL0_CFG_750, PLL1_CFG_1000, PLL2_CFG_1500, PLL3_CFG_800},
+         {PLL0_CFG_1300, PLL1_CFG_800, PLL2_CFG_500, PLL3_CFG_800},
+@@ -77,7 +75,7 @@ struct pll_setting pll_freq_table[] = {
+ #endif 
+ };
+ 
+-struct clock_cfg_settings clk_cfg_table[] =
++static const struct clock_cfg_settings clk_cfg_table[] =
+ {
+         [CLK_CFG1] = { PLL_CFG_1800_1000_1500_1066,
+                         ARM_CLK_900, PLL0,
+@@ -193,6 +191,13 @@ struct clock_cfg_settings clk_cfg_table[] =
+ 						CSYS_CLK_166, PLL0},
+ };
+ 
++#ifdef CONFIG_MACH_COMCERTO_C2K_BOXV2
++// avoid leaving this uninitialized because we want no .bss in boardinit
++static const struct clock_cfg_settings * const cfg_clk = &clk_cfg_table[CLK_CFG];
++#else
++#error remove boxv2 specific initialization above
++#endif
++
+ static inline void HAL_set_pll(u32 pll_no, u32 pll_freq_idx)
+ {
+ 	u32 m = 0;
+@@ -290,12 +295,13 @@ static inline void HAL_set_clock_pll_source(void)
+ 	val &=~(CLK_PLL_SRC_MASK << CLK_PLL_SRC_SHIFT);
+ 	val |= (cfg_clk->ddr_clk_src << 1);
+ 	writel(val, DDR_CLK_CNTRL);
+-
++#if 0
+ 	val = readl(IPSEC_CLK_CNTRL);
+ 	val &=~(CLK_PLL_SRC_MASK << CLK_PLL_SRC_SHIFT);
+ 	val |= (cfg_clk->ipsec_clk_src << 1);
+ 	writel(val, IPSEC_CLK_CNTRL);
+-
++#endif
++#if 0
+ 	val = readl(SATA_OOB_CLK_CNTRL);
+ 	val &=~(CLK_PLL_SRC_MASK << CLK_PLL_SRC_SHIFT);
+ 	val |= (cfg_clk->sata_oob_clk_src << 1);
+@@ -310,7 +316,7 @@ static inline void HAL_set_clock_pll_source(void)
+ 	val &=~(CLK_PLL_SRC_MASK << CLK_PLL_SRC_SHIFT);
+ 	val |= (cfg_clk->dect_clk_src << 1);
+ 	writel(val, DECT_CLK_CNTRL);
+-
++#endif
+ 	val = readl(L2CC_CLK_CNTRL);
+ 	val &=~(CLK_PLL_SRC_MASK << CLK_PLL_SRC_SHIFT);
+ 	val |= (cfg_clk->l2cc_clk_src << 1);
+@@ -335,12 +341,13 @@ static inline void HAL_set_clock_pll_source(void)
+ 	val &=~(CLK_PLL_SRC_MASK << CLK_PLL_SRC_SHIFT);
+ 	val |= (cfg_clk->extphy1_clk_src << 1);
+ 	writel(val, EXTPHY1_CLK_CNTRL);
+-
++#if 0
+ 	val = readl(EXTPHY2_CLK_CNTRL);
+ 	val &=~(CLK_PLL_SRC_MASK << CLK_PLL_SRC_SHIFT);
+ 	val |= (cfg_clk->extphy2_clk_src << 1);
+ 	writel(val, EXTPHY2_CLK_CNTRL);
+-
++#endif
++#if 0
+ 	val = readl(TPI_CLK_CNTRL);
+ 	val &=~(CLK_PLL_SRC_MASK << CLK_PLL_SRC_SHIFT);
+ 	val |= (cfg_clk->tpi_clk_src << 1);
+@@ -350,6 +357,7 @@ static inline void HAL_set_clock_pll_source(void)
+ 	val &=~(CLK_PLL_SRC_MASK << CLK_PLL_SRC_SHIFT);
+ 	val |= (cfg_clk->csys_clk_src << 1);
+ 	writel(val, CSYS_CLK_CNTRL);
++#endif
+ }
+ 
+ static inline void HAL_set_clock(void)
+@@ -358,17 +366,23 @@ static inline void HAL_set_clock(void)
+ 	HAL_set_clock_divider(cfg_clk->ddr_clk, cfg_clk->ddr_clk_src, DDR_CLK_DIV_CNTRL);
+ 	HAL_set_clock_divider(cfg_clk->hfe_clk, cfg_clk->hfe_clk_src, HFE_CLK_DIV_CNTRL);
+ 	HAL_set_clock_divider(cfg_clk->gemtx_clk, cfg_clk->gemtx_clk_src, GEMTX_CLK_DIV_CNTRL);
++#if 0
+ 	HAL_set_clock_divider(cfg_clk->ipsec_clk, cfg_clk->ipsec_clk_src, IPSEC_CLK_DIV_CNTRL);
++#endif
+ 	HAL_set_clock_divider(cfg_clk->extphy0_clk, cfg_clk->extphy0_clk_src, EXTPHY0_CLK_DIV_CNTRL);
+ 	HAL_set_clock_divider(cfg_clk->extphy1_clk, cfg_clk->extphy1_clk_src, EXTPHY1_CLK_DIV_CNTRL);
++#if 0
+ 	HAL_set_clock_divider(cfg_clk->extphy2_clk, cfg_clk->extphy2_clk_src, EXTPHY2_CLK_DIV_CNTRL);
+ 	HAL_set_clock_divider(cfg_clk->sata_oob_clk, cfg_clk->sata_oob_clk_src, SATA_OOB_CLK_DIV_CNTRL);
+ 	HAL_set_clock_divider(cfg_clk->sata_pmu_clk, cfg_clk->sata_pmu_clk_src, SATA_PMU_CLK_DIV_CNTRL);
+ 	HAL_set_clock_divider(cfg_clk->dect_clk, cfg_clk->dect_clk_src, DECT_CLK_DIV_CNTRL);
++#endif
+ 	HAL_set_clock_divider(cfg_clk->l2cc_clk, cfg_clk->l2cc_clk_src, L2CC_CLK_DIV_CNTRL);
+ 	HAL_set_clock_divider(cfg_clk->arm_clk, cfg_clk->arm_clk_src, A9DP_CLK_DIV_CNTRL);
++#if 0
+ 	HAL_set_clock_divider(cfg_clk->tpi_clk, cfg_clk->tpi_clk_src, TPI_CLK_DIV_CNTRL);
+ 	HAL_set_clock_divider(cfg_clk->csys_clk, cfg_clk->csys_clk_src, CSYS_CLK_DIV_CNTRL);
++#endif
+ }
+ 
+ 
+@@ -451,11 +465,13 @@ static inline void HAL_clock_remove_bypass(void)
+ 	HAL_clock_remove_reg_bypass(GEMTX_CLK_DIV_CNTRL);
+ 	HAL_clock_remove_reg_bypass(EXTPHY0_CLK_DIV_CNTRL);
+ 	HAL_clock_remove_reg_bypass(EXTPHY1_CLK_DIV_CNTRL);
++#if 0
+ 	HAL_clock_remove_reg_bypass(EXTPHY2_CLK_DIV_CNTRL);
+ 	HAL_clock_remove_reg_bypass(DECT_CLK_DIV_CNTRL);
+ 	HAL_clock_remove_reg_bypass(IPSEC_CLK_DIV_CNTRL);
+ 	HAL_clock_remove_reg_bypass(SATA_OOB_CLK_DIV_CNTRL);
+ 	HAL_clock_remove_reg_bypass(SATA_PMU_CLK_DIV_CNTRL);
++#endif
+ 	HAL_clock_remove_reg_bypass(L2CC_CLK_DIV_CNTRL);
+ 	HAL_clock_remove_reg_bypass(A9DP_CLK_DIV_CNTRL);
+ 
+@@ -473,8 +489,10 @@ static inline void HAL_bypass_all(void)
+ 	writel(CLK_DIV_BYPASS|CLK_DIV_VAL_DEFAULT, DDR_CLK_DIV_CNTRL);
+ 	writel(CLK_DIV_BYPASS|CLK_DIV_VAL_DEFAULT, HFE_CLK_DIV_CNTRL);
+ 	writel(CLK_DIV_BYPASS|CLK_DIV_VAL_DEFAULT, GEMTX_CLK_DIV_CNTRL);
++#if 0
+ 	writel(CLK_DIV_BYPASS|CLK_DIV_VAL_DEFAULT, SATA_PMU_CLK_DIV_CNTRL);
+ 	writel(CLK_DIV_BYPASS|CLK_DIV_VAL_DEFAULT, SATA_OOB_CLK_DIV_CNTRL);
++#endif
+ 
+ 	writel(0x210000, USB0_PHY_CTRL_REG0);
+ 	writel(0x210000, USB1_PHY_CTRL_REG0);
+@@ -540,11 +558,11 @@ static inline void HAL_unreset_blocks(void)
+ 	unsigned int val = 0;
+ 
+ 	val = readl(AXI_RESET_1);
+-	val &= PFE_SYS_AXI_RESET_BIT; //skip HFE
++	val &= PFE_SYS_AXI_RESET_BIT | 0x12; //skip HFE, skip EAPE, TDM
+ 
+-	writel(0, AXI_RESET_0);
++	writel(0x60, AXI_RESET_0); //reset DPI
+ 	writel(val, AXI_RESET_1);
+-	writel(0, AXI_RESET_2);
++	writel(0x1C, AXI_RESET_2); //reset USB, SATA
+ }
+ 
+ static inline void HAL_hfe_unreset(void)
+@@ -572,9 +590,7 @@ static inline void HAL_hfe_unreset(void)
+ 
+ void SoC_PLL_init(void)
+ {
+-        volatile u32 delay_count;
+-
+-	cfg_clk = &clk_cfg_table[CLK_CFG];
++	volatile u32 delay_count;
+ 
+ 	HAL_bypass_all();
+ 
+diff --git a/arch/arm/mach-comcerto/clocksource.c b/arch/arm/mach-comcerto/clocksource.c
+index 699b821..8434324 100644
+--- a/arch/arm/mach-comcerto/clocksource.c
++++ b/arch/arm/mach-comcerto/clocksource.c
+@@ -7,6 +7,8 @@
+ #include <mach/comcerto-2000.h>
+ #include <mach/a9_mpu.h>
+ 
++#include <mach/clkcore.h>
++
+ #define MAX_TIMER_COUNT	0xffffffff
+ #define MHz	1024*1024
+ 
+diff --git a/arch/arm/mach-comcerto/ddr.c b/arch/arm/mach-comcerto/ddr.c
+index 757945a..3cced43 100644
+--- a/arch/arm/mach-comcerto/ddr.c
++++ b/arch/arm/mach-comcerto/ddr.c
+@@ -6,8 +6,8 @@
+ #include <mach/ddr.h>
+ 
+ 
+-struct ddr_reg_val evm_ddrc_cfg[] = {DDRC_CFG};
+-struct ddr_reg_val evm_ddr_phy_cfg[] = {DDR_PHY_CFG};
++static const struct ddr_reg_val evm_ddrc_cfg[] = {DDRC_CFG};
++static const struct ddr_reg_val evm_ddr_phy_cfg[] = {DDR_PHY_CFG};
+ 
+ void SoC_DDR_init(void)
+ {
+diff --git a/arch/arm/mach-comcerto/gpio.c b/arch/arm/mach-comcerto/gpio.c
+index 72c82fb..992ecfc 100644
+--- a/arch/arm/mach-comcerto/gpio.c
++++ b/arch/arm/mach-comcerto/gpio.c
+@@ -6,12 +6,20 @@
+ 
+ static int c2k_is_gpio_rsvd(unsigned gpio)
+ {
++#if 0 // disabled since no bits are ever set to 1 and it's needed in both boardinit and barebox
++
+ 	if (gpio < 32)
+ 		return ((c2k_gpio_pin_stat.c2k_gpio_pins_0_31 >> gpio) & 0x1) ? 1 : 0 ;
+ 	else if (gpio < 64)
+ 		return ((c2k_gpio_pin_stat.c2k_gpio_pins_32_63 >> (gpio - 32)) & 0x1) ? 1 : 0;
+ 	else
+ 		return -EINVAL;
++
++#else
++
++    return 0;
++
++#endif
+ }
+ 
+ void gpio_set_value(unsigned gpio, int value)
+diff --git a/arch/arm/mach-comcerto/image.c b/arch/arm/mach-comcerto/image.c
+index 60a7ad3..94ec478 100644
+--- a/arch/arm/mach-comcerto/image.c
++++ b/arch/arm/mach-comcerto/image.c
+@@ -21,6 +21,9 @@
+ 
+ 
+ #ifdef CONFIG_SECUREBOOT_TEST
++
++#if 0 // __USE_BOREA_TEST_KEYS
++
+ static const u16 __aligned(8) pub_key_storage[RSA_KEY_LENGTH_2K]={
+ 0x14bd, 0xfba1, 0x800f, 0x4127, 0xfa1c, 0xccf6, 0x8545, 0xcbd2,
+ 0x76a5, 0x4a20, 0xff03, 0x4b9f, 0x4c4d, 0x4b56, 0xf8ee, 0xe7c6,
+@@ -40,7 +43,96 @@ static const u16 __aligned(8) pub_key_storage[RSA_KEY_LENGTH_2K]={
+ 0x861f, 0x5e79, 0x78a2, 0x5e4c, 0x0efa, 0x5299, 0xf401, 0x41c2
+ };
+ static const u16 __aligned(8) aes_key_buffer[AES_128_KEY_LENGTH]={0xebf7, 0x75a2, 0x3a6e, 0x0cd1, 0x2dde, 0x357b, 0x3c98, 0x077e};
+-#endif
++
++#else // __USE_BOREA_TEST_KEYS
++
++#if 1 // __USE_RSA_2K
++
++static const u8 __aligned(8) pub_key_storage[RSA_KEY_LENGTH_2K] = {
++  0xa7, 0x51, 0x37, 0x33, 0x5c, 0x90, 0xe2, 0xac, 0x76, 0x34, 0x83, 0xac,
++  0x74, 0x94, 0x76, 0xbf, 0x72, 0xbe, 0xdc, 0xf5, 0x36, 0x88, 0x86, 0x84,
++  0x7d, 0x86, 0x77, 0x5d, 0x41, 0x3c, 0x88, 0x10, 0xdd, 0x95, 0xcd, 0x35,
++  0x14, 0x75, 0x59, 0x21, 0xb6, 0x80, 0xb9, 0xa5, 0xec, 0x1c, 0x82, 0xdf,
++  0xd1, 0x05, 0x7d, 0xe5, 0x35, 0x68, 0xa5, 0x6a, 0x21, 0xac, 0xdb, 0x24,
++  0x1f, 0xef, 0x46, 0x1e, 0xb4, 0xca, 0x3e, 0xbd, 0x17, 0xb1, 0xae, 0x6d,
++  0xd1, 0x19, 0x96, 0x3b, 0x89, 0xd0, 0x2b, 0xda, 0x65, 0x48, 0xf1, 0xa9,
++  0x12, 0x50, 0x2a, 0xae, 0x4e, 0x4c, 0x57, 0x0e, 0x50, 0x8a, 0xeb, 0xed,
++  0x9f, 0x06, 0x63, 0xac, 0xf5, 0x4f, 0x1e, 0x23, 0x23, 0xc3, 0xb6, 0x86,
++  0x15, 0xf0, 0xed, 0xa5, 0xd5, 0x44, 0xb0, 0x45, 0x66, 0xca, 0x74, 0x04,
++  0xe8, 0xa8, 0x2b, 0x70, 0x67, 0x06, 0xde, 0x8b, 0x8d, 0x43, 0xcb, 0x30,
++  0x49, 0x7c, 0x71, 0xc6, 0x4f, 0x72, 0xa1, 0x32, 0x5e, 0x5c, 0xc5, 0xd2,
++  0xa8, 0x70, 0x3d, 0x54, 0xba, 0x71, 0x7c, 0x61, 0xa0, 0x9a, 0xb0, 0x19,
++  0x16, 0x0c, 0x4d, 0xd9, 0xaf, 0x8a, 0x51, 0xaf, 0x48, 0xd6, 0xaf, 0x57,
++  0x83, 0xe1, 0xf6, 0x18, 0x17, 0x25, 0xd8, 0x73, 0x5c, 0xe9, 0x79, 0xe2,
++  0xf0, 0x78, 0xf5, 0x09, 0xad, 0x1e, 0x96, 0x81, 0x45, 0x6e, 0xe9, 0x24,
++  0xb0, 0xfa, 0x5a, 0x03, 0x93, 0x34, 0x9d, 0x4e, 0x65, 0xe6, 0xf0, 0x39,
++  0xf5, 0x8d, 0xa4, 0x23, 0x14, 0x86, 0xb7, 0x0d, 0x3f, 0xbd, 0xd4, 0xa7,
++  0xa4, 0xaa, 0x44, 0x70, 0x3d, 0xef, 0x2c, 0xec, 0x67, 0x6c, 0x61, 0xbd,
++  0x05, 0x87, 0x84, 0x4c, 0x57, 0x98, 0x48, 0x67, 0xeb, 0xd4, 0x4e, 0xea,
++  0xe3, 0xe6, 0x9d, 0x01, 0xe6, 0xce, 0x2b, 0xb8, 0xfb, 0xf7, 0x74, 0x31,
++  0x51, 0xba, 0x61, 0x55
++};
++
++#else // __USE_RSA_2K
++
++static const u8 __aligned(8) pub_key_storage[RSA_KEY_LENGTH_4k] = {
++  0xc9, 0x95, 0x74, 0x06, 0x66, 0x09, 0xc4, 0x6e, 0x4d, 0x9b, 0x92, 0x1b,
++  0x68, 0x77, 0x62, 0x03, 0x88, 0xd2, 0xbf, 0xbc, 0x29, 0xb8, 0xdc, 0x1d,
++  0xae, 0x98, 0xc8, 0xab, 0xfc, 0x74, 0xca, 0x6c, 0xf0, 0x26, 0xd0, 0xc8,
++  0xb9, 0x71, 0x96, 0x35, 0x01, 0xd5, 0x37, 0x35, 0xc7, 0xc6, 0x74, 0xd9,
++  0x2a, 0xa6, 0xe2, 0x6b, 0x48, 0x44, 0x1a, 0xe3, 0x97, 0x96, 0x6c, 0x48,
++  0x87, 0x39, 0x49, 0xc6, 0xa3, 0xf3, 0xba, 0x8a, 0x3e, 0xdd, 0x6e, 0x96,
++  0xc4, 0x1f, 0xfb, 0x0a, 0xfc, 0x6a, 0x1f, 0xf0, 0x80, 0x4a, 0xe3, 0xec,
++  0xe9, 0x00, 0x67, 0x22, 0x74, 0xc0, 0x3c, 0x50, 0x28, 0x8d, 0x5b, 0x08,
++  0xff, 0xa3, 0x6a, 0x4f, 0x37, 0xe5, 0x2b, 0x2b, 0xf3, 0xc1, 0x79, 0xbc,
++  0x0d, 0x10, 0x76, 0x8d, 0x35, 0xb4, 0x4c, 0xcd, 0xec, 0xb1, 0x31, 0x9a,
++  0xb2, 0x69, 0xdd, 0x4b, 0xaf, 0x18, 0x52, 0x7d, 0xf0, 0x61, 0x10, 0x41,
++  0x0a, 0x57, 0x89, 0xdc, 0x74, 0x61, 0x90, 0xd7, 0xea, 0xa8, 0x59, 0x20,
++  0x82, 0x6d, 0x71, 0xf6, 0x17, 0x3c, 0x08, 0x5c, 0x28, 0x82, 0x9b, 0x8f,
++  0x1b, 0x24, 0xb4, 0xc9, 0x65, 0x86, 0xaa, 0x1c, 0x7d, 0x63, 0xe9, 0xc1,
++  0x90, 0xe7, 0x15, 0x34, 0xf7, 0x8e, 0x3a, 0xcd, 0xad, 0x93, 0x0b, 0x25,
++  0x46, 0x3e, 0x71, 0x97, 0x69, 0x4d, 0xa4, 0x3b, 0x3c, 0x15, 0x8e, 0xe5,
++  0x09, 0xb6, 0x68, 0x55, 0x25, 0x66, 0xa3, 0x2c, 0x66, 0x46, 0xf2, 0x2c,
++  0x8e, 0xa7, 0x0c, 0x04, 0x97, 0x00, 0xbe, 0x39, 0x15, 0xf1, 0xd8, 0x2b,
++  0x85, 0xaf, 0x64, 0x7e, 0x42, 0x6a, 0x5c, 0xf9, 0xff, 0xbc, 0xed, 0x5d,
++  0x42, 0x3c, 0xd8, 0xc0, 0xb5, 0xad, 0xbf, 0x9b, 0x44, 0x94, 0xd8, 0x0a,
++  0xef, 0xa7, 0xb9, 0xc4, 0xca, 0x5f, 0x9f, 0x41, 0xbd, 0x7c, 0x48, 0x2a,
++  0x86, 0x41, 0x06, 0x55, 0x82, 0x84, 0xd0, 0x8a, 0x38, 0xbb, 0x0d, 0xec,
++  0xa8, 0xe9, 0xfe, 0xd8, 0xc2, 0x5b, 0x88, 0xd1, 0x42, 0x8b, 0xb4, 0x1a,
++  0xf5, 0x53, 0x5c, 0xe5, 0x89, 0x2a, 0x6e, 0x1a, 0xfe, 0x9b, 0xe5, 0x56,
++  0xba, 0x9d, 0xab, 0x7b, 0xa7, 0xa7, 0x3f, 0x88, 0x15, 0x7f, 0x88, 0x8d,
++  0x42, 0x99, 0x4f, 0xc9, 0xf2, 0x46, 0x55, 0xde, 0xa1, 0x1e, 0xd6, 0xbc,
++  0x82, 0x01, 0x25, 0x1e, 0x16, 0xb8, 0xe0, 0x8f, 0x27, 0x19, 0x2a, 0xce,
++  0x63, 0xf1, 0x2f, 0x5b, 0xf4, 0x26, 0xf0, 0xfd, 0x6f, 0x04, 0xb9, 0x74,
++  0xd3, 0xa7, 0x66, 0x8b, 0xcb, 0x57, 0x66, 0x94, 0x3b, 0xff, 0x85, 0x0c,
++  0x0f, 0x58, 0x79, 0xe2, 0xc8, 0x53, 0xb3, 0x23, 0xbf, 0xde, 0xcb, 0x64,
++  0x6c, 0xa7, 0x1c, 0xb3, 0x22, 0x73, 0xc3, 0xd8, 0x7f, 0x0a, 0x21, 0x14,
++  0x9a, 0xef, 0x6a, 0xbd, 0x23, 0xaf, 0x97, 0xcc, 0x6e, 0x81, 0xf0, 0xb9,
++  0x42, 0x61, 0x50, 0x67, 0x7d, 0xd5, 0x12, 0x54, 0xfc, 0x76, 0x6e, 0x83,
++  0xea, 0x5c, 0x39, 0xfb, 0x20, 0xea, 0xae, 0x94, 0xfc, 0x45, 0x21, 0xdb,
++  0xde, 0x8f, 0xab, 0x0a, 0x61, 0x5e, 0x9e, 0xd5, 0xe0, 0x4b, 0x81, 0x2d,
++  0x13, 0x4f, 0xb9, 0x2a, 0xbe, 0x00, 0xba, 0xaa, 0xab, 0xcd, 0x42, 0xa1,
++  0x4e, 0x85, 0xeb, 0x53, 0x87, 0x20, 0x93, 0xcb, 0xe0, 0xc2, 0x62, 0xf8,
++  0x1e, 0x39, 0x44, 0x03, 0x3c, 0x0b, 0x65, 0xa7, 0xa4, 0xca, 0x11, 0xc3,
++  0x85, 0x16, 0xb8, 0xb9, 0x1e, 0xd8, 0xa4, 0xca, 0x1e, 0xeb, 0x91, 0xc9,
++  0x97, 0x06, 0xbc, 0x24, 0x88, 0x41, 0xb5, 0x2e, 0x30, 0xb3, 0x4a, 0x94,
++  0x24, 0xcf, 0xe9, 0x15, 0x99, 0x5a, 0x33, 0xfa, 0xe5, 0x60, 0xd2, 0x67,
++  0xe4, 0xa1, 0x13, 0x14, 0xf5, 0x2f, 0xcc, 0x5c, 0x5a, 0x8f, 0x16, 0xd8,
++  0x04, 0x80, 0x82, 0xdf, 0x4f, 0x9e, 0xdc, 0x8f
++};
++
++#endif // __USE_RSA_2K
++
++//static const u8 __aligned(8) aes_key_buffer[AES_128_KEY_LENGTH] = {
++static const u8 __aligned(8) aes_key_buffer[AES_256_KEY_LENGTH] = {
++  0xca, 0x90, 0x37, 0x61, 0x2e, 0x90, 0xed, 0xb2, 0x11, 0x46, 0x6b, 0xa0,
++  0x41, 0x7c, 0x3e, 0x77, 0xf2, 0x66, 0x76, 0xab, 0x36, 0x1a, 0x1b, 0x9a,
++  0x75, 0x61, 0x13, 0x25, 0x18, 0x6f, 0x1f, 0x6b
++};
++
++#endif // __USE_BOREA_TEST_KEYS
++
++#endif // CONFIG_SECUREBOOT_TEST
+ 
+ void * verify_and_authenticate_boot_image(u8 *image_buf)
+ {
+@@ -94,7 +186,7 @@ void * verify_and_authenticate_boot_image(u8 *image_buf)
+ 	if ( key_in_header == TRUE )
+ 		hdr_len += pub_key_length;
+ #else
+-	hash_length = pub_key_length = RSA_KEY_LENGTH_2K;
++	hash_length = pub_key_length = sizeof(pub_key_storage);
+ #endif
+ 
+ 	hdr_len += hash_length;
+@@ -167,7 +259,7 @@ void * verify_and_authenticate_boot_image(u8 *image_buf)
+ #ifndef CONFIG_SECUREBOOT_TEST
+ 		aes_key_length = secureboot_get_aes_key_length();
+ #else
+-		aes_key_length = AES_128_KEY_LENGTH;
++		aes_key_length = sizeof(aes_key_buffer);
+ #endif
+ 		hdr_len += AES_IV_LENGTH;
+ 	}
+@@ -198,7 +290,7 @@ void * verify_and_authenticate_boot_image(u8 *image_buf)
+ 		/* fetch public hash stored in OTP */
+ 		ret = ibr_wrapper_secureboot_get_hash_key(&stored_hash[0]);
+ 		if (!ret) {
+-			printf("Fetching hash failed \n");
++			printf("Fetching rsa hash failed \n");
+ 			return NULL;
+ 		}
+ 
+@@ -212,8 +304,19 @@ void * verify_and_authenticate_boot_image(u8 *image_buf)
+ 		if (ibr_wrapper_secureboot_get_auth_mode()) {
+ 			ret = ibr_wrapper_secureboot_get_key(pub_key);
+ 			if (!ret) {
+-				printf("Fetching hash failed \n");
+-				return NULL;
++                int i;
++
++				printf("Fetching rsa key failed (%d), reading via otp_read.\n", ret);
++
++                ret = ibr_wrapper_otp_read(4, pub_key, pub_key_length + 4);
++                if (ret) {
++				    printf("OTP read failed: %d\n", ret);
++                    return NULL;
++                }
++            
++                // otp_read() ignores our offset and uses 0, so shift data back
++
++                memmove(pub_key, pub_key+4, pub_key_length);
+ 			}
+ 		}
+ 	}
+@@ -271,7 +374,7 @@ void * verify_and_authenticate_boot_image(u8 *image_buf)
+ #ifndef CONFIG_SECUREBOOT_TEST
+ 		ret = secureboot_get_aes_key(aes_key,aes_key_length);
+ 		if (!ret) {
+-			printf("Fetching hash failed \n");
++			printf("Fetching aes key failed \n");
+ 			return NULL;
+ 		}
+ #else
+diff --git a/arch/arm/mach-comcerto/include/mach/comcerto-2000.h b/arch/arm/mach-comcerto/include/mach/comcerto-2000.h
+index bf82ff8..a1c5d92 100644
+--- a/arch/arm/mach-comcerto/include/mach/comcerto-2000.h
++++ b/arch/arm/mach-comcerto/include/mach/comcerto-2000.h
+@@ -144,6 +144,8 @@
+ 
+ #define UART_BASEADDR	0x96400000
+ 
++#define UART_BASEADDR_LED	0x96300000
++
+ /*
+   * Reference Clock Option in Boot Strap Register
+   *
+diff --git a/arch/arm/mach-comcerto/include/mach/gpio.h b/arch/arm/mach-comcerto/include/mach/gpio.h
+index d9f5197..66950ad 100644
+--- a/arch/arm/mach-comcerto/include/mach/gpio.h
++++ b/arch/arm/mach-comcerto/include/mach/gpio.h
+@@ -45,6 +45,7 @@
+ #define COMCERTO_GPIO_PAD_CONFIG3                       (COMCERTO_APB_GPIO_BASE + 0x10C)
+ #define COMCERTO_GPIO_PAD_CONFIG4                       (COMCERTO_APB_GPIO_BASE + 0x110)
+ #define COMCERTO_GPIO_PAD_CONFIG5                       (COMCERTO_APB_GPIO_BASE + 0x114)
++#define COMCERTO_GPIO_PAD_CONFIG9                       (COMCERTO_APB_GPIO_BASE + 0x124)
+ #define COMCERTO_GPIO_MEM_EMA_CONFIG0                   (COMCERTO_APB_GPIO_BASE + 0x1A0)
+ #define COMCERTO_GPIO_MEM_EMA_CONFIG1                   (COMCERTO_APB_GPIO_BASE + 0x1A4)
+ #define COMCERTO_GPIO_EXT_OUTPUT_REG                    (COMCERTO_APB_GPIO_BASE + 0xD0)
+@@ -150,6 +151,8 @@
+ 
+ #define DISABLE_FABRIC_REMAP 0x10
+ 
++#if 0 // disabled since no bits are ever set to 1 and it's needed in both boardinit and barebox
++
+ /* This is a temporary bit mask for avoiding usage of reserved gpio pins. */
+ struct c2k_gpio_pin_stat_info {
+ 	uint32_t c2k_gpio_pins_0_31;
+@@ -158,4 +161,6 @@ struct c2k_gpio_pin_stat_info {
+ 
+ extern struct c2k_gpio_pin_stat_info c2k_gpio_pin_stat;
+ 
++#endif // 0
++
+ #endif
+diff --git a/arch/arm/mach-comcerto/lowlevel.c b/arch/arm/mach-comcerto/lowlevel.c
+index 9dd5fcb..88c855c 100644
+--- a/arch/arm/mach-comcerto/lowlevel.c
++++ b/arch/arm/mach-comcerto/lowlevel.c
+@@ -6,6 +6,8 @@
+ #include <asm/io.h>
+ #include <mach/serdes.h>
+ 
++#if 0 // disabled since no bits are ever set to 1 and it's needed in both boardinit and barebox
++
+ #if defined (CONFIG_COMCERTO_GPIO)
+ struct c2k_gpio_pin_stat_info c2k_gpio_pin_stat =
+ {
+@@ -14,6 +16,8 @@ struct c2k_gpio_pin_stat_info c2k_gpio_pin_stat =
+ };
+ #endif
+ 
++#endif // 0
++
+ extern void SoC_PLL_init(void);
+ 
+ extern void SoC_DDR2_init(void);
+diff --git a/arch/arm/mach-comcerto/secureboot_config.c b/arch/arm/mach-comcerto/secureboot_config.c
+index 0a03224..f3e4e63 100644
+--- a/arch/arm/mach-comcerto/secureboot_config.c
++++ b/arch/arm/mach-comcerto/secureboot_config.c
+@@ -77,6 +77,8 @@ static int c2k_otp_read(u32 byte_offset, u8 *read_data, u32 no_bytes)
+ 	return 0;
+ }
+ 
++#ifdef CONFIG_COMMAND_SUPPORT
++
+ static u8 public_key_storage[RSA_KEY_LENGTH_2K];
+ static void do_c2k_key_write(char *byte_offset_s, char *write_data_s, char *key_length_s)
+ {
+@@ -625,3 +627,4 @@ BAREBOX_CMD_START(c2k_otp_config)
+ 	BAREBOX_CMD_HELP(cmd_c2k_otp_config_help)
+ BAREBOX_CMD_END
+ 
++#endif // CONFIG_COMMAND_SUPPORT
+diff --git a/commands/Kconfig b/commands/Kconfig
+index bc6e93e..059185b 100644
+--- a/commands/Kconfig
++++ b/commands/Kconfig
+@@ -196,9 +196,15 @@ config CMD_LOADB
+ 	tristate
+ 	prompt "loadb"
+ 
+-config CMD_LOADY
++config LOADY
+ 	select CRC16
+ 	depends on EXPERIMENTAL
++	bool
++	prompt "loady common code"
++
++config CMD_LOADY
++	select CRC16
++    select LOADY
+ 	bool
+ 	prompt "loady"
+ 
+diff --git a/commands/Makefile b/commands/Makefile
+index e3726f8..0d12c81 100644
+--- a/commands/Makefile
++++ b/commands/Makefile
+@@ -1,6 +1,7 @@
+ obj-$(CONFIG_CMD_BOOTM)		+= bootm.o
+ obj-$(CONFIG_CMD_LINUX16)	+= linux16.o
+ obj-$(CONFIG_CMD_LOADB)		+= loadb.o xyzModem.o
++obj-$(CONFIG_LOADY)			+= loadb.o xyzModem.o
+ obj-$(CONFIG_CMD_LOADY)		+= loadb.o xyzModem.o
+ obj-$(CONFIG_CMD_LOADS)		+= loads.o
+ obj-$(CONFIG_CMD_ECHO)		+= echo.o
+diff --git a/commands/comcerto_nand.c b/commands/comcerto_nand.c
+index fece647..9bdb38c 100644
+--- a/commands/comcerto_nand.c
++++ b/commands/comcerto_nand.c
+@@ -112,6 +112,7 @@ int erase_nand(ulong offset, ulong count)
+ 
+ EXPORT_SYMBOL(erase_nand);
+ 
++#ifdef CONFIG_UBI_WRITE
+ static int do_erase_nand(struct command *cmdtp, int argc, char *argv[])
+ {
+         ulong offset, count;
+@@ -224,6 +225,9 @@ BAREBOX_CMD_START(update_nand)
+ 	BAREBOX_CMD_HELP(cmd_nand_help)
+ BAREBOX_CMD_END
+ 
++#endif // CONFIG_UBI_WRITE
++
++int read_nand(ulong src, ulong offset, ulong count);
+ 
+ static int do_read_nand(struct command *cmdtp, int argc, char *argv[])
+ {
+diff --git a/commands/gpio.c b/commands/gpio.c
+index 073c9d3..f2807e5 100644
+--- a/commands/gpio.c
++++ b/commands/gpio.c
+@@ -19,17 +19,24 @@
+ #include <command.h>
+ #include <errno.h>
+ #include <gpio.h>
++#include <environment.h>
+ 
+ static int do_gpio_get_value(struct command *cmdtp, int argc, char *argv[])
+ {
+ 	int gpio, value;
++    const char *verbose;
+ 
+ 	if (argc < 2)
+ 		return COMMAND_ERROR_USAGE;
+ 
+ 	gpio = simple_strtoul(argv[1], NULL, 0);
+-
++    
+ 	value = gpio_get_value(gpio);
++
++    verbose = getenv("verbose");
++    if (verbose && verbose[0]=='1')
++        printf("%d\n", value);
++
+ 	if (value < 0)
+ 		return 1;
+ 
+diff --git a/commands/loadb.c b/commands/loadb.c
+index eaaa41d..9ebd51d 100644
+--- a/commands/loadb.c
++++ b/commands/loadb.c
+@@ -600,7 +600,7 @@ err_quit:
+ 
+ #endif				/* CONFIG_CMD_LOADB */
+ 
+-#ifdef CONFIG_CMD_LOADY
++#ifdef CONFIG_LOADY
+ 
+ unsigned long dst_ddr_address = 0x0;
+ int dst_ddr = 0;
+@@ -642,7 +642,7 @@ ulong load_serial_ymodem(void)
+ 		while ((res = xyzModem_stream_read(ymodemBuf, 1024, &err)) >
+ 				0) {
+ 
+-			memcpy(addr, ymodemBuf, res);
++			memcpy((void *)addr, ymodemBuf, res);
+ 
+ 			size += res;
+ 			addr += res;
+@@ -669,7 +669,8 @@ ulong load_serial_ymodem(void)
+ 
+ 	return res;
+ }
+-#endif
++
++#endif /* CONFIG_LOADY */
+ 
+ /**
+  * @brief returns current used console device
+diff --git a/commands/ubi.c b/commands/ubi.c
+index 3da0835..c3d54c0 100644
+--- a/commands/ubi.c
++++ b/commands/ubi.c
+@@ -11,6 +11,8 @@
+ #include <mtd/ubi-user.h>
+ #include <ubi-media.h>
+ 
++#ifdef CONFIG_UBI_WRITE
++
+ static int do_ubimkvol(struct command *cmdtp, int argc, char *argv[])
+ {
+ 	struct ubi_mkvol_req req;
+@@ -55,6 +57,7 @@ BAREBOX_CMD_START(ubimkvol)
+ 	BAREBOX_CMD_HELP(cmd_ubimkvol_help)
+ BAREBOX_CMD_END
+ 
++#endif // CONFIG_UBI_WRITE
+ 
+ static int do_ubiattach(struct command *cmdtp, int argc, char *argv[])
+ {
+@@ -76,7 +79,7 @@ static int do_ubiattach(struct command *cmdtp, int argc, char *argv[])
+ 
+ 	if (ret)
+ 		printf("failed to attach: %s\n", strerror(-ret));
+-
++    
+ 	close(fd);
+ 
+ 	return ret ? 1 : 0;
+diff --git a/commands/xyzModem.c b/commands/xyzModem.c
+index 71d7d68..35c9160 100644
+--- a/commands/xyzModem.c
++++ b/commands/xyzModem.c
+@@ -105,9 +105,9 @@ static struct {
+ #endif
+ } xyz;
+ 
+-#define xyzModem_CHAR_TIMEOUT            2000	/* 2 seconds */
+-#define xyzModem_MAX_RETRIES             20
+-#define xyzModem_MAX_RETRIES_WITH_CRC    10
++#define xyzModem_CHAR_TIMEOUT            400	/* 0.4 seconds */
++#define xyzModem_MAX_RETRIES             100
++#define xyzModem_MAX_RETRIES_WITH_CRC    50
+ /* Wait for 3 CAN before quitting */
+ #define xyzModem_CAN_COUNT                3
+ 
+@@ -122,7 +122,7 @@ static int CYGACC_COMM_IF_GETC_TIMEOUT(char chan, char *c)
+ 		counter++;
+ 	}
+ 	if (tstc()) {
+-		*c = getc();
++		*c = getc_raw();
+ 		return 1;
+ 	}
+ 	return 0;
+@@ -508,6 +508,8 @@ int xyzModem_stream_open(connection_info_t *info, int *err)
+ 	xyz.read_length = 0;
+ 	xyz.file_length = 0;
+ #endif
++    
++	udelay(500*1000);
+ 
+ 	CYGACC_COMM_IF_PUTC(*xyz.__chan, (xyz.crc_mode ? 'C' : NAK));
+ 
+@@ -688,8 +690,8 @@ void xyzModem_stream_close(int *err)
+ }
+ 
+ /* Need to be able to clean out the input buffer, so have to take the */
+-/* getc */
+-void xyzModem_stream_terminate(bool abort, int (*getc) (void))
++/* getc_raw */
++void xyzModem_stream_terminate(bool abort, int (*getc_raw) (void))
+ {
+ 	int c;
+ 
+@@ -730,7 +732,7 @@ void xyzModem_stream_terminate(bool abort, int (*getc) (void))
+ 		 * If we don't eat it now, RedBoot will think the user typed it.
+ 		 */
+ 		ZM_DEBUG(zm_dprintf("Trailing gunk:\n"));
+-		while ((c = (*getc) ()) > -1) ;
++		while ((c = (*getc_raw) ()) > -1) ;
+ 		ZM_DEBUG(zm_dprintf("\n"));
+ 		/*
+ 		 * Make a small delay to give terminal programs like minicom
+diff --git a/common/Kconfig b/common/Kconfig
+index 58f9613..dd1f195 100644
+--- a/common/Kconfig
++++ b/common/Kconfig
+@@ -119,6 +119,11 @@ config MEMORY_LAYOUT_FIXED
+ 
+ endchoice
+ 
++config BOARDINIT_TEXT_BASE
++	depends on MEMORY_LAYOUT_FIXED
++	hex
++	prompt "BOARDINIT_TEXT_BASE"
++
+ config STACK_BASE
+ 	depends on MEMORY_LAYOUT_FIXED
+ 	hex
+diff --git a/common/console.c b/common/console.c
+index 1a1f55d..d8316b7 100644
+--- a/common/console.c
++++ b/common/console.c
+@@ -170,7 +170,7 @@ int console_register(struct console_device *newcdev)
+ }
+ EXPORT_SYMBOL(console_register);
+ 
+-static int getc_raw(void)
++int getc_raw(void)
+ {
+ 	struct console_device *cdev;
+ 	int active = 0;
+diff --git a/common/dlmalloc.c b/common/dlmalloc.c
+index f9e1828..afd5df8 100644
+--- a/common/dlmalloc.c
++++ b/common/dlmalloc.c
+@@ -7,6 +7,12 @@
+ #include <stdio.h>
+ #include <module.h>
+ 
++#define CONFIG_MALLOC_DYNAMIC_BINS
++
++#ifdef CONFIG_MALLOC_DYNAMIC_BINS
++#include <init.h>
++#endif
++
+ /*
+   A version of malloc/free/realloc written by Doug Lea and released to the
+   public domain.  Send questions/comments/complaints/performance data
+@@ -791,6 +797,26 @@ typedef struct malloc_chunk *mbinptr;
+ 
+ #define IAV(i)  bin_at(i), bin_at(i)
+ 
++#ifdef CONFIG_MALLOC_DYNAMIC_BINS
++
++static mbinptr av_[NAV * 2 + 2];
++
++static int dlmalloc_init_bins(void)
++{
++    int i;
++
++    av_[0] = av_[1] = NULL;
++
++    for (i=0; i<NAV; i++)
++        av_[i*2+2] = av_[i*2+3] = ((mbinptr)((char*)&(av_[2*(i) + 2]) - 2*SIZE_SZ));
++
++    return 0;
++}
++
++pure_initcall(dlmalloc_init_bins);
++
++#else // CONFIG_MALLOC_DYNAMIC_BINS
++
+ static mbinptr av_[NAV * 2 + 2] = {
+ 	NULL, NULL,
+ 	IAV (0), IAV (1), IAV (2), IAV (3), IAV (4), IAV (5), IAV (6), IAV (7),
+@@ -826,6 +852,8 @@ static mbinptr av_[NAV * 2 + 2] = {
+ 	IAV (126), IAV (127)
+ };
+ 
++#endif // CONFIG_MALLOC_DYNAMIC_BINS
++
+ /* field-extraction macros */
+ 
+ #define first(b) ((b)->fd)
+diff --git a/common/startup.c b/common/startup.c
+index 01b40cc..d356191 100644
+--- a/common/startup.c
++++ b/common/startup.c
+@@ -42,6 +42,8 @@
+ #include <asm-generic/memory_layout.h>
+ #include <asm/sections.h>
+ 
++#include <mach/comcerto-2000.h>
++
+ extern initcall_t __barebox_initcalls_start[], __barebox_early_initcalls_end[],
+ 		  __barebox_initcalls_end[];
+ 
+@@ -114,14 +116,28 @@ static int mount_root(void)
+ fs_initcall(mount_root);
+ #endif
+ 
+-void start_barebox (void)
++void __naked __section(.text_entry) barebox_entry(void)
++{
++    volatile unsigned funcaddr;
++    void (*func)(void);
++    unsigned i;
++    volatile unsigned len = __bss_start - _stext;
++    volatile unsigned bsslen = __bss_stop - __bss_start;
++    unsigned hash;
++    
++    memset((void *)(TEXT_BASE + len), 0, bsslen);
++    
++    start_barebox();
++}
++
++void start_barebox(void)
+ {
+ 	initcall_t *initcall;
+ 	int result;
+ #ifdef CONFIG_COMMAND_SUPPORT
+ 	struct stat s;
+ #endif
+-
++    
+ #ifdef CONFIG_HAS_EARLY_INIT
+ 	/* We are running from RAM now, copy early initdata from
+ 	 * early RAM to RAM
+@@ -141,39 +157,13 @@ void start_barebox (void)
+ 			hang();
+ 	}
+ 
+-	display_meminfo();
+-
+-#ifdef CONFIG_ENV_HANDLING
+-	if (envfs_load(default_environment_path, "/env")) {
+-#ifdef CONFIG_DEFAULT_ENVIRONMENT
+-#if 0
+-		printf("no valid environment found on %s. "
+-			"Using default environment\n",
+-			default_environment_path);
+-#endif
+-		printf("no valid environment found on /dev/env0. Using default environment\n");
+-		envfs_load("/dev/defaultenv", "/env");
+-#endif
+-	}
+-#endif
+-#ifdef CONFIG_COMMAND_SUPPORT
+-	printf("running /env/bin/init...\n");
+-
+-	if (!stat("/env/bin/init", &s)) {
+-		run_command("source /env/bin/init", 0);
+-	} else {
+-		printf("not found\n");
+-	}
+-#endif
++#ifdef CONFIG_HAVE_NOSHELL
++    hang();
++#else
+ 	/* main_loop() can return to retry autoboot, if so just run it again. */
+ 	for (;;)
+-#ifndef CONFIG_HAVE_NOSHELL
+ 		run_shell();
+-#else
+-	;	
+ #endif
+-
+-	/* NOTREACHED - no way out of command loop except booting */
+ }
+ 
+ void __noreturn hang (void)
+diff --git a/drivers/mtd/nand/comcerto_nand.c b/drivers/mtd/nand/comcerto_nand.c
+index d002cff..90ca2d8 100644
+--- a/drivers/mtd/nand/comcerto_nand.c
++++ b/drivers/mtd/nand/comcerto_nand.c
+@@ -517,6 +517,8 @@ static int comcerto_correct_ecc(struct mtd_info *mtd, uint8_t *dat,
+ 	writel(ECC_POLY_START, ECC_POLY_START_CFG);
+ 
+ 	err_corr_data_prev = 0;
++    
++    //start = get_time_ns(); -- this hangs when reading via ubi
+ 
+ 	/* Read Correction data status register till header is 0x7FD */
+ 	do {
+@@ -647,7 +649,7 @@ static int comcerto_nand_read_page_hwecc(struct mtd_info *mtd,
+ 	uint8_t ecc_bytes = nand_device->ecc.bytes;
+ 	uint8_t stat;
+ 	uint8_t *oob = nand_device->oob_poi;
+-	unsigned int max_bitflips = 0;
++
+ 
+ 	for (i = 0; eccsteps; eccsteps--, i += eccbytes, p += eccsize) {
+ 		chip->ecc.hwctl(mtd, NAND_ECC_READ);
+@@ -659,7 +661,6 @@ static int comcerto_nand_read_page_hwecc(struct mtd_info *mtd,
+ 			mtd->ecc_stats.failed++;
+ 		} else {
+ 			mtd->ecc_stats.corrected += stat;
+-			max_bitflips = max_t(unsigned int, max_bitflips, stat);
+ 		}
+ 
+ 		comcerto_ecc_shift(ECC_SHIFT_DISABLE);
+@@ -674,7 +675,7 @@ static int comcerto_nand_read_page_hwecc(struct mtd_info *mtd,
+ 	if (i)
+ 		chip->read_buf(mtd, oob, i);
+ 
+-	return max_bitflips;
++	return 0;
+ }
+ 
+ #ifdef CONFIG_COMCERTO_NAND_ERASE_FBB
+@@ -768,7 +769,7 @@ static int comcerto_nand_ready(struct mtd_info *mtd)
+  */
+ static int nand_read_page_raw_syndrome(struct mtd_info *mtd,
+                                         struct nand_chip *chip,
+-                                        uint8_t *buf, int page)
++                                        uint8_t *buf)
+ {
+         int eccsize = chip->ecc.size;
+         int eccbytes = chip->ecc.bytes;
+diff --git a/drivers/mtd/nand/nand_base.c b/drivers/mtd/nand/nand_base.c
+index c87ee11..54a8f54 100644
+--- a/drivers/mtd/nand/nand_base.c
++++ b/drivers/mtd/nand/nand_base.c
+@@ -56,6 +56,17 @@
+ 	#define NAND_MAX_ECC_BIT_ERRORS 1
+ #endif
+ 
++/*
++ * CONFIG_SYS_NAND_RESET_CNT is used as a timeout mechanism when resetting
++ * a flash.  NAND flash is initialized prior to interrupts so standard timers
++ * can't be used.  CONFIG_SYS_NAND_RESET_CNT should be set to a value
++ * which is greater than (max NAND reset time / NAND status read time).
++ * A conservative default of 200000 (500 us / 25 ns) is used as a default.
++ */
++#ifndef CONFIG_SYS_NAND_RESET_CNT
++#define CONFIG_SYS_NAND_RESET_CNT 200000
++#endif
++
+ /* Define default oob placement schemes for large and small page devices */
+ static struct nand_ecclayout nand_oob_8 = {
+ 	.eccbytes = 3,
+@@ -356,6 +367,7 @@ static void nand_command(struct mtd_info *mtd, unsigned int command,
+ {
+ 	register struct nand_chip *chip = mtd->priv;
+ 	int ctrl = NAND_CTRL_CLE | NAND_CTRL_CHANGE;
++	uint32_t rst_sts_cnt = CONFIG_SYS_NAND_RESET_CNT;
+ 
+ 	/*
+ 	 * Write out the command to the device.
+@@ -422,7 +434,8 @@ static void nand_command(struct mtd_info *mtd, unsigned int command,
+ 			       NAND_CTRL_CLE | NAND_CTRL_CHANGE);
+ 		chip->cmd_ctrl(mtd,
+ 			       NAND_CMD_NONE, NAND_NCE | NAND_CTRL_CHANGE);
+-		while (!(chip->read_byte(mtd) & NAND_STATUS_READY)) ;
++		while (!(chip->read_byte(mtd) & NAND_STATUS_READY) &&
++			(rst_sts_cnt--));
+ 		return;
+ 
+ 		/* This applies to read commands */
+@@ -459,6 +472,7 @@ static void nand_command_lp(struct mtd_info *mtd, unsigned int command,
+ 			    int column, int page_addr)
+ {
+ 	register struct nand_chip *chip = mtd->priv;
++	uint32_t rst_sts_cnt = CONFIG_SYS_NAND_RESET_CNT;
+ 
+ 	/* Emulate NAND_CMD_READOOB */
+ 	if (command == NAND_CMD_READOOB) {
+@@ -529,7 +543,8 @@ static void nand_command_lp(struct mtd_info *mtd, unsigned int command,
+ 			       NAND_NCE | NAND_CLE | NAND_CTRL_CHANGE);
+ 		chip->cmd_ctrl(mtd, NAND_CMD_NONE,
+ 			       NAND_NCE | NAND_CTRL_CHANGE);
+-		while (!(chip->read_byte(mtd) & NAND_STATUS_READY)) ;
++		while (!(chip->read_byte(mtd) & NAND_STATUS_READY) &&
++			(rst_sts_cnt--));
+ 		return;
+ 
+ 	case NAND_CMD_RNDOUT:
+@@ -737,6 +752,8 @@ static int nand_do_read_ops(struct mtd_info *mtd, loff_t from,
+ 
+ 			max_bitflips = max_t(unsigned int, max_bitflips, ret);
+ 
++			ret = 0;
++
+ 			/* Transfer not aligned data */
+ 			if (!aligned) {
+ 				chip->pagebuf = realpage;
+@@ -1691,7 +1708,8 @@ int nand_scan_tail(struct mtd_info *mtd)
+ 	 * the out of band area
+ 	 */
+ 	chip->ecc.layout->oobavail = 0;
+-	for (i = 0; chip->ecc.layout->oobfree[i].length; i++)
++	for (i = 0; chip->ecc.layout->oobfree[i].length
++            && i < ARRAY_SIZE(chip->ecc.layout->oobfree); i++)
+ 		chip->ecc.layout->oobavail +=
+ 			chip->ecc.layout->oobfree[i].length;
+ 	mtd->oobavail = chip->ecc.layout->oobavail;
+diff --git a/drivers/mtd/ubi/Kconfig b/drivers/mtd/ubi/Kconfig
+index 35d321b..48709cb 100644
+--- a/drivers/mtd/ubi/Kconfig
++++ b/drivers/mtd/ubi/Kconfig
+@@ -1,6 +1,7 @@
+ config UBI
+ 	bool "UBI support               "
+ 	select PARTITION_NEED_MTD
++    select CRC32
+ 	help
+ 	  This enables support for UBI (unsorted block images)
+ 
+diff --git a/drivers/mtd/ubi/build.c b/drivers/mtd/ubi/build.c
+index a59972f..549732d 100644
+--- a/drivers/mtd/ubi/build.c
++++ b/drivers/mtd/ubi/build.c
+@@ -824,7 +824,7 @@ int ubi_attach_mtd_dev(struct mtd_info *mtd, int ubi_num, int vid_hdr_offset)
+ 			err);
+ 		goto out_uif;
+ 	}
+-
++    
+ 	ubi_msg("attached mtd%d to ubi%d", mtd->index, ubi_num);
+ 	ubi_msg("MTD device name:            \"%s\"", mtd->name);
+ 	ubi_msg("MTD device size:            %llu MiB", ubi->flash_size >> 20);
+diff --git a/drivers/mtd/ubi/eba.c b/drivers/mtd/ubi/eba.c
+index 8f2b3b1..dd7f7a8 100644
+--- a/drivers/mtd/ubi/eba.c
++++ b/drivers/mtd/ubi/eba.c
+@@ -613,6 +613,7 @@ write_error:
+ int ubi_eba_write_leb(struct ubi_device *ubi, struct ubi_volume *vol, int lnum,
+ 		      const void *buf, int offset, int len, int dtype)
+ {
++#ifdef CONFIG_UBI_WRITE
+ 	int err, pnum, tries = 0, vol_id = vol->vol_id;
+ 	struct ubi_vid_hdr *vid_hdr;
+ 
+@@ -716,6 +717,10 @@ write_error:
+ 	vid_hdr->sqnum = cpu_to_be64(next_sqnum(ubi));
+ 	ubi_msg("try another PEB");
+ 	goto retry;
++#else
++    printf("ENXIO: %s\n", __FUNCTION__);
++    return -ENXIO;
++#endif // CONFIG_UBI_WRITE
+ }
+ 
+ /**
+@@ -745,6 +750,7 @@ int ubi_eba_write_leb_st(struct ubi_device *ubi, struct ubi_volume *vol,
+ 			 int lnum, const void *buf, int len, int dtype,
+ 			 int used_ebs)
+ {
++#ifdef CONFIG_UBI_WRITE
+ 	int err, pnum, tries = 0, data_size = len, vol_id = vol->vol_id;
+ 	struct ubi_vid_hdr *vid_hdr;
+ 	uint32_t crc;
+@@ -836,6 +842,10 @@ write_error:
+ 	vid_hdr->sqnum = cpu_to_be64(next_sqnum(ubi));
+ 	ubi_msg("try another PEB");
+ 	goto retry;
++#else
++    printf("ENXIO: %s\n", __FUNCTION__);
++    return -ENXIO;
++#endif // CONFIG_UBI_WRITE
+ }
+ 
+ /*
+diff --git a/drivers/mtd/ubi/io.c b/drivers/mtd/ubi/io.c
+index 96d2772..00b11ee 100644
+--- a/drivers/mtd/ubi/io.c
++++ b/drivers/mtd/ubi/io.c
+@@ -473,6 +473,7 @@ out:
+  */
+ int ubi_io_sync_erase(struct ubi_device *ubi, int pnum, int torture)
+ {
++#ifdef CONFIG_UBI_WRITE
+ 	int err, ret = 0;
+ 
+ 	ubi_assert(pnum >= 0 && pnum < ubi->peb_count);
+@@ -497,6 +498,10 @@ int ubi_io_sync_erase(struct ubi_device *ubi, int pnum, int torture)
+ 		return err;
+ 
+ 	return ret + 1;
++#else
++    printf("ENXIO: %s\n", __FUNCTION__);
++    return -ENXIO;
++#endif // CONFIG_UBI_WRITE
+ }
+ 
+ /**
+diff --git a/drivers/mtd/ubi/upd.c b/drivers/mtd/ubi/upd.c
+index fda2043..da5b506 100644
+--- a/drivers/mtd/ubi/upd.c
++++ b/drivers/mtd/ubi/upd.c
+@@ -301,6 +301,7 @@ static int write_leb(struct ubi_device *ubi, struct ubi_volume *vol, int lnum,
+ int ubi_more_update_data(struct ubi_device *ubi, struct ubi_volume *vol,
+ 			 const void __user *buf, int count)
+ {
++#ifdef CONFIG_UBI_WRITE
+ 	uint64_t tmp;
+ 	int lnum, offs, err = 0, len, to_write = count;
+ 
+@@ -388,6 +389,10 @@ int ubi_more_update_data(struct ubi_device *ubi, struct ubi_volume *vol,
+ 	ubi_assert(vol->upd_received <= vol->upd_bytes);
+ 
+ 	return err;
++#else
++    printf("ENXIO: %s\n", __FUNCTION__);
++    return -ENXIO;
++#endif // CONFIG_UBI_WRITE
+ }
+ 
+ /**
+diff --git a/drivers/mtd/ubi/vmt.c b/drivers/mtd/ubi/vmt.c
+index 4f1d0f4..07c6164 100644
+--- a/drivers/mtd/ubi/vmt.c
++++ b/drivers/mtd/ubi/vmt.c
+@@ -209,6 +209,7 @@ static void volume_sysfs_close(struct ubi_volume *vol)
+  */
+ int ubi_create_volume(struct ubi_device *ubi, struct ubi_mkvol_req *req)
+ {
++#ifdef CONFIG_UBI_WRITE
+ 	int i, err, vol_id = req->vol_id, dont_free = 0;
+ 	struct ubi_volume *vol;
+ 	struct ubi_vtbl_record vtbl_rec;
+@@ -405,6 +406,10 @@ out_unlock:
+ 		kfree(vol);
+ 	ubi_err("cannot create volume %d, error %d", vol_id, err);
+ 	return err;
++#else
++    printf("ENXIO: %s\n", __FUNCTION__);
++    return -ENXIO;
++#endif // CONFIG_UBI_WRITE
+ }
+ 
+ /**
+@@ -418,6 +423,7 @@ out_unlock:
+  */
+ int ubi_remove_volume(struct ubi_volume_desc *desc)
+ {
++#ifdef CONFIG_UBI_WRITE
+ 	struct ubi_volume *vol = desc->vol;
+ 	struct ubi_device *ubi = vol->ubi;
+ 	int i, err, vol_id = vol->vol_id, reserved_pebs = vol->reserved_pebs;
+@@ -485,6 +491,10 @@ out_err:
+ out_unlock:
+ 	spin_unlock(&ubi->volumes_lock);
+ 	return err;
++#else
++    printf("ENXIO: %s\n", __FUNCTION__);
++    return -ENXIO;
++#endif // CONFIG_UBI_WRITE
+ }
+ 
+ /**
+@@ -498,6 +508,7 @@ out_unlock:
+  */
+ int ubi_resize_volume(struct ubi_volume_desc *desc, int reserved_pebs)
+ {
++#ifdef CONFIG_UBI_WRITE
+ 	int i, err, pebs, *new_mapping;
+ 	struct ubi_volume *vol = desc->vol;
+ 	struct ubi_device *ubi = vol->ubi;
+@@ -609,6 +620,10 @@ out_acc:
+ out_free:
+ 	kfree(new_mapping);
+ 	return err;
++#else
++    printf("ENXIO: %s\n", __FUNCTION__);
++    return -ENXIO;
++#endif // CONFIG_UBI_WRITE
+ }
+ 
+ /**
+diff --git a/drivers/mtd/ubi/vtbl.c b/drivers/mtd/ubi/vtbl.c
+index 765c811..bfef57d 100644
+--- a/drivers/mtd/ubi/vtbl.c
++++ b/drivers/mtd/ubi/vtbl.c
+@@ -258,6 +258,7 @@ bad:
+ static int create_vtbl(struct ubi_device *ubi, struct ubi_scan_info *si,
+ 		       int copy, void *vtbl)
+ {
++//#ifdef CONFIG_UBI_WRITE
+ 	int err, tries = 0;
+ 	static struct ubi_vid_hdr *vid_hdr;
+ 	struct ubi_scan_volume *sv;
+@@ -327,7 +328,10 @@ write_error:
+ out_free:
+ 	ubi_free_vid_hdr(ubi, vid_hdr);
+ 	return err;
+-
++//#else
++//    printf("ENXIO: %s\n", __FUNCTION__);
++//    return -ENXIO;
++//#endif // CONFIG_UBI_WRITE
+ }
+ 
+ /**
+diff --git a/drivers/mtd/ubi/wl.c b/drivers/mtd/ubi/wl.c
+index 137e600..df65bf5 100644
+--- a/drivers/mtd/ubi/wl.c
++++ b/drivers/mtd/ubi/wl.c
+@@ -751,6 +751,7 @@ static int schedule_erase(struct ubi_device *ubi, struct ubi_wl_entry *e,
+ static int wear_leveling_worker(struct ubi_device *ubi, struct ubi_work *wrk,
+ 				int cancel)
+ {
++#ifdef CONFIG_UBI_WRITE
+ 	int err, put = 0, scrubbing = 0, protect = 0;
+ 	struct ubi_wl_prot_entry *uninitialized_var(pe);
+ 	struct ubi_wl_entry *e1, *e2;
+@@ -959,6 +960,10 @@ out_cancel:
+ 	mutex_unlock(&ubi->move_mutex);
+ 	ubi_free_vid_hdr(ubi, vid_hdr);
+ 	return 0;
++#else
++    printf("ENXIO: %s\n", __FUNCTION__);
++    return -ENXIO;
++#endif // CONFIG_UBI_WRITE
+ }
+ 
+ /**
+@@ -971,6 +976,7 @@ out_cancel:
+  */
+ static int ensure_wear_leveling(struct ubi_device *ubi)
+ {
++#ifdef CONFIG_UBI_WRITE
+ 	int err = 0;
+ 	struct ubi_wl_entry *e1;
+ 	struct ubi_wl_entry *e2;
+@@ -1024,6 +1030,14 @@ out_cancel:
+ out_unlock:
+ 	spin_unlock(&ubi->wl_lock);
+ 	return err;
++
++#else
++    
++    // This is also called from ubi_wl_init_scan which will 
++    // fail if this returns an error.
++    return 0; 
++
++#endif // CONFIG_UBI_WRITE
+ }
+ 
+ /**
+@@ -1040,6 +1054,7 @@ out_unlock:
+ static int erase_worker(struct ubi_device *ubi, struct ubi_work *wl_wrk,
+ 			int cancel)
+ {
++#ifdef CONFIG_UBI_WRITE
+ 	struct ubi_wl_entry *e = wl_wrk->e;
+ 	int pnum = e->pnum, err, need;
+ 
+@@ -1142,6 +1157,9 @@ static int erase_worker(struct ubi_device *ubi, struct ubi_work *wl_wrk,
+ out_ro:
+ 	ubi_ro_mode(ubi);
+ 	return err;
++#else
++    return 0;
++#endif // CONFIG_UBI_WRITE
+ }
+ 
+ /**
+@@ -1157,6 +1175,7 @@ out_ro:
+  */
+ int ubi_wl_put_peb(struct ubi_device *ubi, int pnum, int torture)
+ {
++#ifdef CONFIG_UBI_WRITE
+ 	int err;
+ 	struct ubi_wl_entry *e;
+ 
+@@ -1222,6 +1241,10 @@ retry:
+ 	}
+ 
+ 	return err;
++#else
++    printf("ENXIO: %s\n", __FUNCTION__);
++    return -ENXIO;
++#endif // CONFIG_UBI_WRITE
+ }
+ 
+ /**
+@@ -1236,6 +1259,7 @@ retry:
+  */
+ int ubi_wl_scrub_peb(struct ubi_device *ubi, int pnum)
+ {
++#ifdef CONFIG_UBI_WRITE
+ 	struct ubi_wl_entry *e;
+ 
+ 	ubi_msg("schedule PEB %d for scrubbing", pnum);
+@@ -1284,6 +1308,10 @@ retry:
+ 	 * by the WL worker.
+ 	 */
+ 	return ensure_wear_leveling(ubi);
++#else
++    printf("ENXIO: %s\n", __FUNCTION__);
++    return -ENXIO;
++#endif // CONFIG_UBI_WRITE
+ }
+ 
+ /**
+diff --git a/drivers/otp/c2k_otp.c b/drivers/otp/c2k_otp.c
+index 9e2ea36..09de65e 100644
+--- a/drivers/otp/c2k_otp.c
++++ b/drivers/otp/c2k_otp.c
+@@ -57,6 +57,8 @@ int otp_smart_write_sequence(u32 offset, u8 prog_data)
+ 		printf("Timeout waiting for PGMEN "
+ 				"to be deasserted\n");
+ 	}
++
++    return 0;
+ }
+ 
+ 
+diff --git a/drivers/serial/fast_uart.c b/drivers/serial/fast_uart.c
+index a44d64b..8ac0056 100644
+--- a/drivers/serial/fast_uart.c
++++ b/drivers/serial/fast_uart.c
+@@ -5,54 +5,96 @@
+ #include <asm/io.h>
+ #include <mach/comcerto-2000.h>
+ #include <mach/serial.h>
++#include <mach/gpio.h>
+ #include <fast_uart.h>
+ 
+-static int fast_uart_setbrg (struct console_device *cdev, int baudrate)
++#define GPIO8_UART0_RX		(0x2 << 16)
++#define GPIO9_UART0_TX		(0x2 << 18)
++#define UART0_BUS	(GPIO8_UART0_RX | GPIO9_UART0_TX)
++
++void c2k_init_uart_led(void)
+ {
++    // select alternate function for GPIO 8 and 9
++    writel((readl(COMCERTO_GPIO_PIN_SELECT_REG) & ~(GPIO_8 | GPIO_9)) | UART0_BUS, COMCERTO_GPIO_PIN_SELECT_REG);
++    
++    // disable output enable GPIO 8 (i.e. set as input)
++    writel(readl(COMCERTO_GPIO_OE_REG) & ~GPIO_8, COMCERTO_GPIO_OE_REG);
++
++    // enable  output enable GPIO 9
++    writel(readl(COMCERTO_GPIO_OE_REG) | GPIO_9, COMCERTO_GPIO_OE_REG);
++    
++    // set GPIO 9 to 0
++    writel(readl(COMCERTO_GPIO_OUTPUT_REG) & ~GPIO_9, COMCERTO_GPIO_OUTPUT_REG);
++}
+ 
+-	struct fast_uart_plat *plat = (struct fast_uart_plat *) cdev->dev->platform_data;
+-	u32 clock = plat->clock;
++// todo can we just take clk from serial_plat instead of receiving it as param to c2k_ fns ?
+ 
+ /* 
+  * 16-bit Divisor Latch register that contains the baud rate divisor for the UART.
+  *
+  * baud rate = (serial clock freq) / (16 * divisor).
+  */
++void c2k_setbrg(size_t map_base, u32 clock, int baudrate)
++{
+ 	u32 div;
+ 
+ 	/* round to nearest */
+ 	div = (clock + 8 * baudrate) / (16 * baudrate);
+ 
+-	writel(LCR_DLAB, cdev->dev->map_base + UART_LCR); /* Enable Data latch to write divisor latch */
++	writel(LCR_DLAB, map_base + UART_LCR); /* Enable Data latch to write divisor latch */
++
++	writel( (div & 0xFF), map_base + UART_DLL); 
++	writel( (div >> 8 ) & 0xFF, map_base + UART_DLH);
++
++	writel(0x00, map_base + UART_LCR); /* Disable date latch */
++	writel(LCR_CHAR_LEN_8 , map_base + UART_LCR); /* Eight bits per character, 1 stop bit */
++	writel(FCR_FIFOEN | FCR_RCVRRES | FCR_XMITRES, map_base + UART_FCR); /* Reset Tx and Rx FIFOs; Enable FIFO mode; Set Rx FIFO threshold */
++}
++
++void c2k_putc(size_t map_base, char c)
++{
++	/* wait for room in the tx FIFO on FFUART */
++	while ((readl(map_base + UART_LSR) & LSR_THRE) == 0) ;
++	writel(c, map_base + UART_THR);
++}
++
++int c2k_getc(size_t map_base)
++{
++	while ((readl(map_base + UART_LSR) & LSR_DR) == 0);
++	return (char)readl(map_base + UART_RBR) & 0xff;
++}
++
++int c2k_tstc(size_t map_base)
++{
++	return readl(map_base + UART_LSR) & LSR_DR;
++}
++
++// --
+ 
+-	writel( (div & 0xFF), cdev->dev->map_base + UART_DLL); 
+-	writel( (div >> 8 ) & 0xFF, cdev->dev->map_base + UART_DLH);
++static int fast_uart_setbrg (struct console_device *cdev, int baudrate)
++{
++	struct fast_uart_plat *plat = (struct fast_uart_plat *) cdev->dev->platform_data;
+ 
+-	writel(0x00, cdev->dev->map_base + UART_LCR); /* Disable date latch */
+-	writel(LCR_CHAR_LEN_8 , cdev->dev->map_base + UART_LCR); /* Eight bits per character, 1 stop bit */
+-	writel(FCR_FIFOEN | FCR_RCVRRES | FCR_XMITRES, cdev->dev->map_base + UART_FCR); /* Reset Tx and Rx FIFOs; Enable FIFO mode; Set Rx FIFO threshold */
++    c2k_setbrg(cdev->dev->map_base, plat->clock, baudrate);
+ 
+ 	return 0;
+ }
+ 
+ void fast_uart_putc (struct console_device *cdev, const char c)
+ {
+-	/* wait for room in the tx FIFO on FFUART */
+-	while ((readl(cdev->dev->map_base + UART_LSR) & LSR_THRE) == 0) ;
+-	writel(c, cdev->dev->map_base + UART_THR);
++    c2k_putc(cdev->dev->map_base, c);
+ 	if (c == '\n')
+-		fast_uart_putc (cdev, '\r');
++		c2k_putc(cdev->dev->map_base, '\r');
+ }
+ 
+ int fast_uart_getc (struct console_device *cdev)
+ {
+-	while ((readl(cdev->dev->map_base + UART_LSR) & LSR_DR) == 0);
+-	return (char)readl(cdev->dev->map_base + UART_RBR) & 0xff;
++    return c2k_getc(cdev->dev->map_base);
+ }
+ 
+ int fast_uart_tstc (struct console_device *cdev)
+ {
+-	return readl(cdev->dev->map_base + UART_LSR) & LSR_DR;
++    return c2k_tstc(cdev->dev->map_base);
+ }
+ 
+ static int fast_uart_probe(struct device_d *dev)
+@@ -84,4 +126,3 @@ static int fast_uart_init(void)
+ }
+ 
+ console_initcall(fast_uart_init);
+-
+diff --git a/include/asm-generic/sections.h b/include/asm-generic/sections.h
+index 1f48fb8..c5d60a9 100644
+--- a/include/asm-generic/sections.h
++++ b/include/asm-generic/sections.h
+@@ -4,8 +4,5 @@
+ extern char _text[], _stext[], _etext[];
+ extern char __bss_start[], __bss_stop[];
+ extern char _end[];
+-extern void *_barebox_image_size;
+-
+-#define barebox_image_size	(unsigned int)&_barebox_image_size
+ 
+ #endif /* _ASM_GENERIC_SECTIONS_H_ */
+diff --git a/include/console.h b/include/console.h
+index 3bcc5db..c5e370f 100644
+--- a/include/console.h
++++ b/include/console.h
+@@ -67,5 +67,7 @@ void early_console_start(const char *name, int baudrate);
+  */
+ void *get_early_console_base(const char *name);
+ 
++int getc_raw(void);
++
+ #endif
+ 
+diff --git a/include/fast_uart.h b/include/fast_uart.h
+index cad065f..c7f08e7 100644
+--- a/include/fast_uart.h
++++ b/include/fast_uart.h
+@@ -10,4 +10,10 @@ struct fast_uart_plat {
+ 	unsigned int clock;
+ };
+ 
++void c2k_init_uart_led(void);
++void c2k_setbrg(size_t map_base, u32 clock, int baudrate);
++void c2k_putc(size_t map_base, char c);
++int c2k_getc(size_t map_base);
++int c2k_tstc(size_t map_base);
++
+ #endif				/* __FAST_UART_PLATFORM_H_ */
+diff --git a/include/gpio.h b/include/gpio.h
+index 9fc03a4..8e85c99 100644
+--- a/include/gpio.h
++++ b/include/gpio.h
+@@ -1 +1,6 @@
+ #include <asm/gpio.h>
++
++void gpio_set_value(unsigned gpio, int value);
++int gpio_get_value(unsigned gpio);
++int gpio_direction_input(unsigned gpio);
++int gpio_direction_output(unsigned gpio, int value);
+diff --git a/include/init.h b/include/init.h
+index 2f4fac1..71f5e23 100644
+--- a/include/init.h
++++ b/include/init.h
+@@ -7,8 +7,11 @@
+ #define __init
+ #define __initdata
+ 
+-/* For assembly routines */
+-#define __BARE_INIT	.section ".text_bare_init.text","ax"
++/* For assembly routines: */
++/* (but all of .text_bare_init went to boardinit) */
++
++//#define __BARE_INIT	.section ".text_bare_init.text","ax"
++#define __BARE_INIT
+ 
+ #ifndef __ASSEMBLY__
+ typedef int (*initcall_t)(void);
+@@ -42,7 +45,10 @@ typedef int (*initcall_t)(void);
+  *
+  * Mainly useful for booting from NAND Controllers
+  */
+-#define __bare_init          __section(.text_bare_init.text)
++
++/* All of .text_bare_init went to boardinit */
++//#define __bare_init          __section(.text_bare_init.text)
++#define __bare_init
+ 
+ #endif
+ 
+diff --git a/include/linux/compiler-gcc5.h b/include/linux/compiler-gcc5.h
+new file mode 100644
+index 0000000..94dea3f
+--- /dev/null
++++ b/include/linux/compiler-gcc5.h
+@@ -0,0 +1,61 @@
++#ifndef __LINUX_COMPILER_H
++#error "Please don't include <linux/compiler-gcc4.h> directly, include <linux/compiler.h> instead."
++#endif
++
++/* GCC 4.1.[01] miscompiles __weak */
++#ifdef __KERNEL__
++# if __GNUC_MINOR__ == 1 && __GNUC_PATCHLEVEL__ <= 1
++#  error Your version of gcc miscompiles the __weak directive
++# endif
++#endif
++
++#define __used			__attribute__((__used__))
++#define __must_check 		__attribute__((warn_unused_result))
++#define __compiler_offsetof(a,b) __builtin_offsetof(a,b)
++#define __always_inline		inline __attribute__((always_inline))
++
++/*
++ * A trick to suppress uninitialized variable warning without generating any
++ * code
++ */
++#define uninitialized_var(x) x = x
++
++#if __GNUC_MINOR__ >= 3
++/* Mark functions as cold. gcc will assume any path leading to a call
++   to them will be unlikely.  This means a lot of manual unlikely()s
++   are unnecessary now for any paths leading to the usual suspects
++   like BUG(), printk(), panic() etc. [but let's keep them for now for
++   older compilers]
++
++   Early snapshots of gcc 4.3 don't support this and we can't detect this
++   in the preprocessor, but we can live with this because they're unreleased.
++   Maketime probing would be overkill here.
++
++   gcc also has a __attribute__((__hot__)) to move hot functions into
++   a special section, but I don't see any sense in this right now in
++   the kernel context */
++#define __cold			__attribute__((__cold__))
++
++
++#if __GNUC_MINOR__ >= 5
++/*
++ * Mark a position in code as unreachable.  This can be used to
++ * suppress control flow warnings after asm blocks that transfer
++ * control elsewhere.
++ *
++ * Early snapshots of gcc 4.5 don't support this and we can't detect
++ * this in the preprocessor, but we can live with this because they're
++ * unreleased.  Really, we need to have autoconf for the kernel.
++ */
++#define unreachable() __builtin_unreachable()
++#endif
++
++#endif
++
++#if __GNUC_MINOR__ > 0
++#define __compiletime_object_size(obj) __builtin_object_size(obj, 0)
++#endif
++#if __GNUC_MINOR__ >= 4
++#define __compiletime_warning(message) __attribute__((warning(message)))
++#define __compiletime_error(message) __attribute__((error(message)))
++#endif
+diff --git a/include/linux/mtd/nand.h b/include/linux/mtd/nand.h
+index f7647e5..5287014 100644
+--- a/include/linux/mtd/nand.h
++++ b/include/linux/mtd/nand.h
+@@ -49,7 +49,7 @@ extern void nand_wait_ready(struct mtd_info *mtd);
+ #define NAND_MAX_OOBSIZE	576
+ #define NAND_MAX_PAGESIZE	8192
+ #else
+-#define NAND_MAX_OOBSIZE	128
++#define NAND_MAX_OOBSIZE	256
+ #define NAND_MAX_PAGESIZE	4096
+ #endif
+ 
+diff --git a/include/puff.h b/include/puff.h
+new file mode 100644
+index 0000000..e23a245
+--- /dev/null
++++ b/include/puff.h
+@@ -0,0 +1,35 @@
++/* puff.h
++  Copyright (C) 2002-2013 Mark Adler, all rights reserved
++  version 2.3, 21 Jan 2013
++
++  This software is provided 'as-is', without any express or implied
++  warranty.  In no event will the author be held liable for any damages
++  arising from the use of this software.
++
++  Permission is granted to anyone to use this software for any purpose,
++  including commercial applications, and to alter it and redistribute it
++  freely, subject to the following restrictions:
++
++  1. The origin of this software must not be misrepresented; you must not
++     claim that you wrote the original software. If you use this software
++     in a product, an acknowledgment in the product documentation would be
++     appreciated but is not required.
++  2. Altered source versions must be plainly marked as such, and must not be
++     misrepresented as being the original software.
++  3. This notice may not be removed or altered from any source distribution.
++
++  Mark Adler    madler@alumni.caltech.edu
++ */
++
++
++/*
++ * See puff.c for purpose and usage.
++ */
++#ifndef NIL
++#  define NIL ((unsigned char *)0)      /* for no output option */
++#endif
++
++int puff(unsigned char *dest,           /* pointer to destination pointer */
++         unsigned long *destlen,        /* amount of output space */
++         const unsigned char *source,   /* pointer to source data pointer */
++         unsigned long *sourcelen);     /* amount of input available */
+diff --git a/lib/Kconfig b/lib/Kconfig
+index ad2b3cf..09a25ab 100644
+--- a/lib/Kconfig
++++ b/lib/Kconfig
+@@ -10,6 +10,9 @@ config CRC32
+ config CRC16
+ 	bool
+ 
++config DYNAMIC_CRC16_TABLE
++	bool
++
+ menuconfig DIGEST
+ 	bool "Digest                        "
+ 
+diff --git a/lib/crc16.c b/lib/crc16.c
+index 6904365..6b0737b 100644
+--- a/lib/crc16.c
++++ b/lib/crc16.c
+@@ -58,6 +58,29 @@
+ #include "crc.h"
+ 
+ /* Table of CRC constants - implements x^16+x^12+x^5+1 */
++
++#ifdef CONFIG_DYNAMIC_CRC16_TABLE
++
++static unsigned short crc16_tab[256];
++
++void generate_crc16_table(void)
++{
++    unsigned short poly = 0x1021;
++    unsigned short i;
++    int j;
++
++    for (i = 0; i < 256; i++) {
++        unsigned short r = i << 8;
++
++        for (j = 0; j < 8; j++)
++            r = (r & 0x8000) ? (r << 1) ^ poly : (r << 1);
++
++        crc16_tab[i] = r;
++    }
++}
++
++#else // CONFIG_DYNAMIC_CRC16_TABLE
++
+ static const uint16_t crc16_tab[] = {
+     0x0000, 0x1021, 0x2042, 0x3063, 0x4084, 0x50a5, 0x60c6, 0x70e7,
+     0x8108, 0x9129, 0xa14a, 0xb16b, 0xc18c, 0xd1ad, 0xe1ce, 0xf1ef,
+@@ -93,11 +116,18 @@ static const uint16_t crc16_tab[] = {
+     0x6e17, 0x7e36, 0x4e55, 0x5e74, 0x2e93, 0x3eb2, 0x0ed1, 0x1ef0,
+ };
+ 
++#endif // CONFIG_DYNAMIC_CRC16_TABLE
++
+ uint16_t
+ cyg_crc16(unsigned char *buf, int len)
+ {
+     int i;
+     uint16_t cksum;
++    
++#ifdef CONFIG_DYNAMIC_CRC16_TABLE
++    if (crc16_tab[1] == 0)
++        generate_crc16_table();
++#endif
+ 
+     cksum = 0;
+     for (i = 0;  i < len;  i++) {
+diff --git a/mtdparts-to-addparts.py b/mtdparts-to-addparts.py
+new file mode 100755
+index 0000000..df8a7c6
+--- /dev/null
++++ b/mtdparts-to-addparts.py
+@@ -0,0 +1,22 @@
++#!/usr/bin/env python
++
++mtdparts="1M(u-boot)ro,1M(env),4M(kernelR),256M(rootR),4M(kernelA),512M(rootA),4M(kernelB),512M(rootB),512M(data)"
++
++ofs = 0
++
++for part in mtdparts.split(","):
++    paren = part.find("(")
++    if paren < 0:
++        raise Exception("error1: " + part)
++
++    sz_str = part[:paren]
++    if not sz_str.endswith("M"):
++        raise Exception("error2: " + part)
++
++    sz = int(sz_str[:-1]) * 1024*1024
++    
++    name = part[paren:]
++
++    print "addpart /dev/nand0 %s@0x%08x%s" % (sz_str, ofs, name)
++
++    ofs += sz
+diff --git a/scripts/flash.sh b/scripts/flash.sh
+new file mode 100755
+index 0000000..0fef01f
+--- /dev/null
++++ b/scripts/flash.sh
+@@ -0,0 +1,9 @@
++#!/bin/bash
++
++[ -n "$1" ] || { echo "need image"; exit 1; }
++
++[ "$USER" = "root" ] || { echo "run this as root"; exit 1; }
++
++stty -F $1 115200
++
++sz "$2" < $1 > $1
+diff --git a/sort-strings.sh b/sort-strings.sh
+new file mode 100755
+index 0000000..ddeead4
+--- /dev/null
++++ b/sort-strings.sh
+@@ -0,0 +1 @@
++strings barebox.bin | awk '{ print length, $0 }' | sort -n -s | cut -d" " -f2-
+diff --git a/tools/ImageGenarator/Makefile b/tools/ImageGenarator/Makefile
+index 0122dc4..bf01277 100644
+--- a/tools/ImageGenarator/Makefile
++++ b/tools/ImageGenarator/Makefile
+@@ -1,7 +1,7 @@
+-all: clean header
++all: c2kimage_gen
+ 
+-header:
+-	$(CC) c2kimage_gen.c -o c2kimage_gen
++c2kimage_gen:
++	gcc -Wall c2kimage_gen.c -o c2kimage_gen
+ 
+ install:
+ 	cp mk_c2kimage.sh /usr/local/bin/
+diff --git a/tools/ImageGenarator/mk_c2kimage.sh b/tools/ImageGenarator/mk_c2kimage.sh
+index e189766..4495cd1 100755
+--- a/tools/ImageGenarator/mk_c2kimage.sh
++++ b/tools/ImageGenarator/mk_c2kimage.sh
+@@ -1,4 +1,4 @@
+-#!/bin/sh
++#!/bin/bash
+ ################################################################################
+ # This script generates c2k images(that includes image header) from the standard
+ # binary file. It can generates header with NULL, SHA256, RSA signatures, and
+@@ -30,6 +30,8 @@
+ # Note: RSA key size is determined from the given private key.
+ ################################################################################
+ 
++set -eo pipefail
++
+ usage()
+ {
+ 	echo "Usage..."
+@@ -86,6 +88,8 @@ check_image()
+ # $2 file name to store hash
+ calculate_c2k_hash()
+ {
++    set -eo pipefail
++
+ 	img_size=$(stat -c%s $1)
+ 	part_size=$(((252*1024)))
+ 	tmp_hash_file=`mktemp` || exit 1
+@@ -217,7 +221,7 @@ nonlegacy)
+ 		echo $aes_iv > $aes_iv_file
+ 
+ 		echo "************VERY IMPORTANT*************"
+-		echo "Program this AES key $aes_key into OTP area stored in aes.key file"
++		echo "Program this AES key (aes_${aes_key_size}_plain.key) into OTP area stored in aes.key file"
+ 
+ 	        #Calculate SHA256 hash on fw file.
+ 	        if [ ! -e $private_key ]; then
+diff --git a/tools/ImageGenarator/uldr_gen.sh b/tools/ImageGenarator/uldr_gen.sh
+index 57bebac..0cf88d1 100755
+--- a/tools/ImageGenarator/uldr_gen.sh
++++ b/tools/ImageGenarator/uldr_gen.sh
+@@ -1,4 +1,6 @@
+-#!/bin/sh
++#!/bin/bash
++
++set -eo pipefail
+ 
+ while IFS=: read f1 f2 f3 f4 f5
+ do
+@@ -9,14 +11,14 @@
+ field5=$f5
+ done < hdr_gen_cfg
+ 
+-make clean;make header
++make
+ 
+ echo "Generating microloader" 
+-sh mk_c2kimage.sh $field1 $field2 $field3 $field4 $field5
++bash mk_c2kimage.sh $field1 $field2 $field3 $field4 $field5
+ mv $field5.c2kimg ../../uloader.bin
+-echo "Done.\n\n"
++echo "Done."
+ 
+ echo "Deleting barebox.bin file" 
+-rm barebox.bin *.key *.rawkey *.pem publickeyhash-*
+-echo "Done.\n\n"
++rm -f barebox.bin *.key *.rawkey *.pem publickeyhash-*
++echo "Done."
+ 

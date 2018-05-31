@@ -1,0 +1,2 @@
+CHANGES:
+1. Makefile - If kernel version is 3.2 it copies atm*.h files from another path.

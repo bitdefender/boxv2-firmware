@@ -1,0 +1,337 @@
+#!/bin/sh
+# Copyright (C) 2006 OpenWrt.org
+
+. /etc/functions.sh
+
+usage() {
+	cat <<EOF
+Usage: $0 [down|detect|radiochange]
+enables (default), disables or detects a wifi configuration.
+EOF
+	exit 1
+}
+
+find_net_config() {(
+	local vif="$1"
+	local cfg
+	local ifname
+
+	config_get cfg "$vif" network
+
+	[ -z "$cfg" ] && {
+		include /lib/network
+		scan_interfaces
+
+		config_get ifname "$vif" ifname
+
+		cfg="$(find_config "$ifname")"
+	}
+	[ -z "$cfg" ] && return 0
+	echo "$cfg"
+)}
+
+
+bridge_interface() {(
+	local cfg="$1"
+	[ -z "$cfg" ] && return 0
+
+	include /lib/network
+	scan_interfaces
+
+	config_get iftype "$cfg" type
+	[ "$iftype" = bridge ] && config_get "$cfg" ifname
+)}
+
+find_vap_bridge_interface() {(
+	local vap_id="$1"
+	local vap_ifname interface br_iface
+	
+	vap_ifname=$(uci -q get ${vap_id}.${vap_id}.interface)
+	[ -z "$vap_ifname" ] && return 0
+	
+	for interface in `ubus -S list 'network.interface.*'`; do
+		echo "interface=$interface" >>/test.log
+		if [ "$(uci -q get network.${interface##network.interface.}.type)" = "bridge" ]; then
+			if [ "$(uci -q get network.${interface##network.interface.}.wifi)" = "1" ]; then
+				echo ${interface##network.interface.}
+			fi
+		fi
+	done
+	
+)}
+
+prepare_key_wep() {
+	local key="$1"
+	local hex=1
+
+	echo -n "$key" | grep -qE "[^a-fA-F0-9]" && hex=0
+	[ "${#key}" -eq 10 -a $hex -eq 1 ] || \
+	[ "${#key}" -eq 26 -a $hex -eq 1 ] || {
+		[ "${key:0:2}" = "s:" ] && key="${key#s:}"
+        	key="$(echo -n "$key" | hexdump -ve '1/1 "%02x" ""')"
+	}
+	echo "$key"
+}
+
+wifi_fixup_hwmode() {
+	local device="$1"
+	local default="$2"
+	local hwmode hwmode_11n
+
+	config_get channel "$device" channel
+	config_get hwmode "$device" hwmode
+	case "$hwmode" in
+		11bg) hwmode=bg;;
+		11a) hwmode=a;;
+		11b) hwmode=b;;
+		11g) hwmode=g;;
+		11n*)
+			hwmode_11n="${hwmode##11n}"
+			case "$hwmode_11n" in
+				a|g) ;;
+				default) hwmode_11n="$default"
+			esac
+			config_set "$device" hwmode_11n "$hwmode_11n"
+		;;
+		*)
+			hwmode=
+			if [ "${channel:-0}" -gt 0 ]; then 
+				if [ "${channel:-0}" -gt 14 ]; then
+					hwmode=a
+				else
+					hwmode=g
+				fi
+			else
+				hwmode="$default"
+			fi
+		;;
+	esac
+	config_set "$device" hwmode "$hwmode"
+}
+
+wifi_updown() {
+	[ enable = "$1" ] && {
+		wifi_updown disable "$2"
+		scan_wifi
+	}
+        vap_id=$2
+	for device in ${3:-$DEVICES}; do (
+		config_get disabled "$device" disabled
+		[ 1 == "$disabled" ] && {
+			echo "'$device' is disabled"
+			set disable
+		}
+		config_get iftype "$device" type
+		if eval "type ${1}_$iftype" 2>/dev/null >/dev/null; then
+			eval "scan_$iftype '$vap_id' '$device'"
+			eval "${1}_$iftype '$vap_id' '$device'" || echo "$vap_id($device)($iftype): ${1} failed"
+		else
+			echo "$vap_id($device)($iftype): Interface type not supported"
+		fi
+	        [ "$disabled" == "1" ] && {
+	        	config_set "$vap_id" interface ""
+			uci set "$vap_id"."$vap_id".interface=""
+			uci commit $vap_id
+	        }
+	); done
+}
+
+wifi_detect() {
+uci set wireless.general.radio0_found="0"
+uci set wireless.general.radio1_found="0"
+uci set wireless.general.radio2_found="0"
+uci commit wireless
+config_set general radio0_found "0"
+config_set general radio1_found "0"
+config_set general radio2_found "0"
+
+config_get vap_list general VAPS
+for vap_id in $vap_list; do
+  uci set "$vap_id"."$vap_id".interface=""
+  uci commit $vap_id
+  config_set "$vap_id" interface ""
+done
+
+radio_indexes="0 1 2"
+for radio_index in $radio_indexes; do
+  eval radio${radio_index}_detected="n"
+  uci set wireless.radio${radio_index}.type=""
+  uci set wireless.radio${radio_index}.devname=""
+  config_set "radio${radio_index}" type ""
+  config_set "radio${radio_index}" devname ""
+done
+uci commit wireless
+for driver in ${2:-$DRIVERS}; do 
+  eval ${driver}_index=0
+done
+
+for radio_index in $radio_indexes; do
+ if [ $radio_index -eq 0 -o $radio_index -eq 1 ]; then
+   value="$(head -`expr $radio_index + 1` /proc/bus/pci/devices | tail -1 | cut -c 1-2)"
+ elif [ $radio_index -eq 2 ]; then
+   value="$(cat /proc/bus/usb/devices | grep 15a9| grep 0006)"
+   [ -n "$value" ] && radio2_detected="y"
+ fi
+ if [ -n "$value" ]; then
+   if [ "$value" = "00" ]; then
+     radio0_detected="y"
+   elif [ "$value" = "01" ]; then
+     radio1_detected="y"
+   fi
+   eval value="\$radio${radio_index}_detected"
+   if [ "$value" = "y" ]; then
+     for driver in ${2:-$DRIVERS}; do 
+       process="n"
+       if [ "$radio_index" -eq 0 -o "$radio_index" -eq 1 ]; then
+         [ "$driver" != "rt2870" ] && process="y"
+       elif [ $radio_index -eq 2 ]; then
+         [ "$driver" = "rt2870" ] && process="y"
+       fi
+       if [ "$process" = "y" ]; then 
+         config_get radio_found general "radio${radio_index}_found"
+         if [ $radio_found -eq 0 ]; then
+           if eval "type detect_$driver" 2>/dev/null >/dev/null; then
+             eval drv_index_val="\$${driver}_index"
+             eval "detect_$driver $drv_index_val $radio_index" || echo "$driver: Detect failed" >&2
+             config_get radio_found general "radio${radio_index}_found"
+             if [ $radio_found -eq 1 ]; then
+               if [ "$driver" = "rt2860" -o "$driver" = "rt2870" -o "$driver" = "rt2880" ]; then
+                 rt2860_index=`expr $rt2860_index + 1`
+                 rt2870_index=`expr $rt2870_index + 1`
+                 rt2880_index=`expr $rt2880_index + 1`
+               else
+                 drv_index_val=`expr $drv_index_val + 1`
+                 eval ${driver}_index=$drv_index_val
+               fi
+             fi
+           else
+             echo "$driver: Hardware detection not supported" >&2
+           fi
+         fi
+       fi
+     done
+   fi
+ fi
+done
+}
+
+start_net() {(
+	local iface="$1"
+	local config="$2"
+	local vifmac="$3"
+
+	[ -f "/var/run/$iface.pid" ] && kill "$(cat /var/run/${iface}.pid)" 2>/dev/null
+	include /lib/network
+	scan_interfaces
+	setup_interface "$iface" "$config" "" "$vifmac"
+)}
+
+set_wifi_up() {
+	local cfg="$1"
+	local ifname="$2"
+	uci_set_state wireless "$cfg" up 1
+	uci_set_state wireless "$cfg" ifname "$ifname"
+}
+
+set_wifi_down() {
+	local cfg="$1"
+	local vifs vif vifstr
+
+	[ -f "/var/run/wifi-${cfg}.pid" ] &&
+		kill "$(cat "/var/run/wifi-${cfg}.pid")" 2>/dev/null
+	uci_revert_state wireless "$cfg"
+	config_get vifs "$cfg" vifs
+	for vif in $vifs; do
+		uci_revert_state wireless "$vif"
+	done
+}
+
+scan_wifi() {
+	local cfgfile="$1"
+	DEVICES=
+	config_cb() {
+#		local type="$1"
+#		local section="$2"
+
+		# section start
+#		case "$type" in
+#			wifi-radio)
+#				append DEVICES "$section"
+#				config_set "$section" vifs ""
+#				config_set "$section" ht_capab ""
+#			;;
+#		esac
+
+		# section end
+		config_get TYPE "$CONFIG_SECTION" TYPE
+		case "$TYPE" in
+			wifi-radio)
+				append DEVICES "$CONFIG_SECTION"
+			;;
+			wifi-vap)
+#				config_get device "$CONFIG_SECTION" device
+				config_get VAPS general VAPS 
+				append VAPS "$CONFIG_SECTION"
+				config_set general VAPS "$VAPS"
+			;;
+		esac
+	}
+	config_load "${cfgfile:-wireless}"
+}
+
+DEVICES=
+DRIVERS=
+include /lib/wifi
+scan_wifi
+cd /etc/config
+for vap_id in $(ls vap* 2>&-); do
+  scan_wifi $vap_id
+done
+
+case "$1" in
+	down) 
+	config_get radio_type $2 radio_type
+	if [ -n "$radio_type" ]; then
+          wifi_updown "disable" "$2" "$radio_type"
+        fi 
+        ;;
+	detect) wifi_detect "$2";;
+	radiochange) 
+        for radioid in radio0 radio1 radio2; do
+          config_get flag $radioid flag
+          [ "$flag" -eq 1 ] && {
+            config_get found general ${radioid}_found
+            [ "$found" -eq 1 ] && {
+	      config_get vap_list general VAPS
+              for vap_id in $vap_list; do
+                config_get radio_type $vap_id radio_type
+                [ -n "$radio_type" -a "$radioid" = "$radio_type" ] && wifi_updown "disable" "$vap_id" "$radio_type" 
+              done
+              for vap_id in $vap_list; do
+                config_get radio_type $vap_id radio_type
+                [ -n "$radio_type" -a "$radioid" = "$radio_type" ] && wifi_updown "enable" "$vap_id" "$radio_type" 
+              done
+            }
+          }
+        done
+	;;
+	--help|help) usage;;
+	*) 
+        config_get radio0_found general radio0_found
+        config_get radio1_found general radio1_found
+        config_get radio2_found general radio2_found
+        if [ "$radio0_found" = "1" -o "$radio1_found" = "1" -o "$radio2_found" = "1" ]; then
+	  config_get vap_list general VAPS
+          for vap_id in ${2:-$vap_list}; do
+            config_get radio_type $vap_id radio_type
+            found=""
+            [ -n "$radio_type" ] && eval found="\$${radio_type}_found"
+            [ "$found" = "1" ] && { 
+#              config_get type "$radio_type" type
+		echo "wifi_updown "enable" "$vap_id" "$radio_type""
+              wifi_updown "enable" "$vap_id" "$radio_type"
+            }
+          done
+        fi
+	;;
+esac

@@ -1,0 +1,94 @@
+#!/bin/sh /etc/rc.common
+# Copyright (C) 2006 OpenWrt.org
+START=99
+
+#DEFAULT=/etc/default/pppoe-relay
+
+start() {
+	. /usr/lib/webif/webif.sh
+	uci_load pppoerelay
+#	[ -f $DEFAULT ] && . $DEFAULT
+	
+        [ -f /var/run/pppoerelay.pid ] && kill $(cat /var/run/pppoerelay.pid) >/dev/null 2>&1
+	config_get pppoe_relay_enable general enable
+	if [ "$pppoe_relay_enable" = "1" ]; then
+	  server_options=""
+	  client_options=""
+	  mixed_options=""
+	  lan_ifname=`uci get network.lan.ifname`
+	  wan_ifname=`uci get network.wan.ifname`
+	  config_get server_lan general server_lan
+	  [ "$server_lan" = "1" ] && server_options="$server_options -S $lan_ifname"
+ 	  config_get server_wan general server_wan
+	  [ "$server_wan" = "1" ] && server_options="$server_options -S $wan_ifname"
+	  config_get client_lan general client_lan
+	  [ "$client_lan" = "1" ] && client_options="$client_options -C $lan_ifname"
+	  config_get client_wan general client_wan
+	  [ "$client_wan" = "1" ] && client_options="$client_options -C $wan_ifname"
+	  config_get mixed_lan general mixed_lan
+	  [ "$mixed_lan" = "1" ] && mixed_options="$mixed_options -B $lan_ifname"
+	  config_get mixed_wan general mixed_wan
+	  [ "$mixed_wan" = "1" ] && mixed_options="$mixed_options -B $wan_ifname"
+	  wififound=`uci get wireless.general.found`
+	  equal "$wififound" 1 && {
+	    wifi_name=`uci get wireless.general.type`
+            if [ "$wifi_name" = "wifi0" ]; then
+              wifi_ifname="ath0"
+            else
+              wifi_ifname="$wifi_name"
+            fi
+	    config_get server_wifi general server_wifi 
+	    [ "$server_wifi" = "1" ] && server_options="$server_options -S $wifi_ifname"
+	    config_get client_wifi general client_wifi 
+	    [ "$client_wifi" = "1" ] && client_options="$client_options -C $wifi_ifname"
+	    config_get mixed_wifi general mixed_wifi 
+	    [ "$mixed_wifi" = "1" ] && mixed_options="$mixed_options -B $wifi_ifname"
+	  }
+#	  bridge_count=`uci get bridge.general.count`
+#	  index=1
+#	  while [ $index -le "$bridge_count" ]
+#	  do
+	  brnames=$(ubus list network.interface.* | cut -d'.' -f 3 | sed "s/loopback//g" | sed "s/lan//g" | sed "s/wan//g" | sed "/^$/d")
+	  for bridge_name in $brnames; do
+#  	    bridge_name=`uci get bridge.general.brname$index`
+	    config_get server_br_enable general server_br_$bridge_name
+	    [ "$server_br_enable" = "1" ] && server_options="$server_options -S br-$bridge_name"
+	    config_get client_br_enable general client_br_$bridge_name
+	    [ "$client_br_enable" = "1" ] && client_options="$client_options -C br-$bridge_name"
+	    config_get mixed_br_enable general mixed_br_$bridge_name
+	    [ "$mixed_br_enable" = "1" ] && mixed_options="$mixed_options -B br-$bridge_name"
+#  	    index=`expr $index + 1`
+	  done
+
+	  vlan_count=`uci get vlan.general.count`
+	  index=1
+	  while [ $index -le "$vlan_count" ]
+	  do
+  	    vlan_id=`uci get vlan.vlan$index.id`
+	    net=`uci get vlan.vlan$index.net`
+	    vlan_ifname=`uci get network.$net.ifname`
+	    vlan_iface="$vlan_ifname"."$vlan_id"
+	    config_get server_vlan_enable general server_vlan_"$vlan_ifname"_"$vlan_id"
+	    [ "$server_vlan_enable" = "1" ] && server_options="$server_options -S $vlan_iface"
+	    config_get client_vlan_enable general client_vlan_"$vlan_ifname"_"$vlan_id"
+	    [ "$client_vlan_enable" = "1" ] && client_options="$client_options -C $vlan_iface"
+	    config_get mixed_vlan_enable general mixed_vlan_"$vlan_ifname"_"$vlan_id"
+	    [ "$mixed_vlan_enable" = "1" ] && mixed_options="$mixed_options -B $vlan_iface"
+  	    index=`expr $index + 1`
+	  done
+#	  [ -n "$server_options" ] && server_side_options="-S $server_options"
+#	  [ -n "$client_options" ] && client_side_options="-C $client_options"
+#	  [ -n "$mixed_options" ] && mixed_side_options="-B $mixed_options"
+	  config_get max_sessions general max_sessions
+	  [ -n "$max_sessions" ] && sessions="-n $max_sessions"
+#	  echo "server_options=$server_options client_options=$client_options mixed_options=$mixed_options sessions=$sessions"
+#	  echo "server_options=$server_options client_options=$client_options mixed_options=$mixed_options sessions=$sessions" >>/test
+	  pppoe-relay $server_options $client_options $mixed_options $sessions
+	fi
+}
+
+stop() {
+        [ -f /var/run/pppoerelay.pid ] && kill $(cat /var/run/pppoerelay.pid) >/dev/null 2>&1
+#	killall pppoe-relay
+}
+

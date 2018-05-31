@@ -1,0 +1,12 @@
+#!/bin/sh
+
+# Configuring hardware TDM settings
+echo 8192000 > /sys/devices/platform/comcerto-tdm.0/clock_hz
+echo 1 > /sys/devices/platform/comcerto-tdm.0/clock_output
+echo 0x3FF > /sys/devices/platform/comcerto-tdm.0/fs_lwidth
+echo 1 > /sys/devices/platform/comcerto-tdm.0/fs_hwidth
+echo 1 > /sys/devices/platform/comcerto-tdm.0/fs_output
+echo 0 > /sys/devices/platform/comcerto-tdm.0/fs_polarity
+
+# Updating asterisk configuration
+/lib/asterisk/configure_asterisk_pri

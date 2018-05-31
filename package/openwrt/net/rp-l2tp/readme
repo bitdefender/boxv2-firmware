@@ -1,0 +1,27 @@
+SOURCE: rp-l2tp package of version 0.4 is taken from Openwrt Chaos calmer base packages
+	Openwrt package repository for Chaos Calmer have the same package version as that BB
+
+CC Info:
+commit 6c0569db46d8b53d0fd12b08c3cda70f691f0d60
+Author: nico <nico@3c298f89-4303-0410-b956-a3cf2f4a3e73>
+Date:   Sat Apr 18 23:46:37 2015 +0000
+Title: sctp: moved to github
+
+BB Info:
+SOURCE:https://github.com/openwrt/packages/tree/master/net/rp-l2tp
+MORE INFO:
+commit 10313e98af8f881facc2a3fe83073d314e96ecbd
+Merge: 39c3541 999cc6a
+Author: Steven Barth <steven@midlink.org>
+Date:   Thu Feb 19 16:21:46 2015 +0100
+
+The package version is same in both AA and BB
+
+AA Info:
+SOURCE: The rp-l2tp package is picked up from the following OpenWRT branch
+       https://dev.openwrt.org/browser#branches/packages_12.09/net/rp-l2tp @SVN rev 33626
+
+CHANGES:   
+1) 002-FSL-rp-l2tp-config.patch - has been added by FSL to support L2TP  fast forward. 
+2) Makefile - has been modified to link to the cmm library.
+

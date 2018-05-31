@@ -1,0 +1,13 @@
+SOURCE:This has been taken from barrier breaker packages 14.07 of revison 44441
+URL:https://dev.openwrt.org/browser/branches/packages_14.07/utils/hdparm?rev=44441
+SUPPORT : Hard disk drive configuration utilitity
+Changes:
+
+None
+
+Package Version is same as Attitude Adjustment
+AA Info:
+SOURCE : hdparm 9.39 version package took from Openwrt Attitude Adjustment 12.09 packages base and SVN revision is 36089
+SOURCE PATH : https://dev.openwrt.org/browser/branches/packages_12.09/utils/hdparm/Makefile?rev=36089
+
+

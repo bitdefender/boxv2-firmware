@@ -1,0 +1,95 @@
+diff -pruN vapi_old/VAPI/common/vapi/announcement_fsm.c vapi_new/VAPI/common/vapi/announcement_fsm.c
+--- vapi_old/VAPI/common/vapi/announcement_fsm.c	2011-12-02 10:33:16.000000000 +0200
++++ vapi_new/VAPI/common/vapi/announcement_fsm.c	2012-02-21 17:51:52.000000000 +0200
+@@ -508,6 +508,12 @@ VSTATUS VFSM_PlayDataTransfer(IN SChnl *
+ 		if(!pstHostSpeechData->pucBuffer)
+ 		{
+ 			pstFrameData->pucFrameBuffer = VCORE_GetFrame(pstHostSpeechData, pstHostSpeechData->usStartOffset, FRAME_HEADER_LEN);
++			if (!pstFrameData->pucFrameBuffer)
++			{
++				Status = VAPI_ERR_UNDEFINED;
++				goto finish;
++			}
++
+ 			VCORE_CleanFrame(pstHostSpeechData, pstFrameData->pucFrameBuffer);
+ 		}
+ 
+@@ -521,8 +527,11 @@ VSTATUS VFSM_PlayDataTransfer(IN SChnl *
+ 							pstHostSpeechData->uiBufferLength - pstFrameData->uiBufferSizeLeft, 
+ 							FRAME_HEADER_LEN);
+ 
+-			if (pstFrameData->pucFrameBuffer == NULL)
++			if (!pstFrameData->pucFrameBuffer)
++			{
++				Status = VAPI_ERR_UNDEFINED;
+ 				goto finish;
++			}
+ 
+ 			pstFrameData->uiFrameLen = UT_LE2CPU16(*((U16 *) pstFrameData->pucFrameBuffer + OFFSET_FOR_BUF_LEN));
+ 
+@@ -572,8 +581,11 @@ VSTATUS VFSM_PlayDataTransfer(IN SChnl *
+ 							pstHostSpeechData->uiBufferLength - pstFrameData->uiBufferSizeLeft, 
+ 							pstFrameData->uiFrameLen);
+ 
+-			if (pstFrameData->pucFrameBuffer == NULL)
++			if (!pstFrameData->pucFrameBuffer)
++			{
++				Status = VAPI_ERR_UNDEFINED;
+ 				goto finish;
++			}
+ 
+ 			UT_MemCopy(pucFrameBufferWithHeader, pstFrameData->pucFrameBuffer, pstFrameData->uiFrameLen);
+ 		}
+@@ -583,8 +595,11 @@ VSTATUS VFSM_PlayDataTransfer(IN SChnl *
+ 							pstHostSpeechData->uiBufferLength - pstFrameData->uiBufferSizeLeft, 
+ 							uiFrameLenConst * uiNumberOfFrames);
+ 
+-			if (pstFrameData->pucFrameBuffer == NULL)
++			if (!pstFrameData->pucFrameBuffer)
++			{
++				Status = VAPI_ERR_UNDEFINED;
+ 				goto finish;
++			}
+ 			
+ 			*((U32 *) pucFrameBufferWithHeader + OFFSET_FOR_TIMESTAMP) = UT_CPU2LE32(pstFrameData->uiFrameTimeStamp);
+ 			*((U16 *) pucFrameBufferWithHeader + OFFSET_FOR_FRAME_TYPE) = UT_CPU2LE16(1);
+@@ -722,8 +737,11 @@ VSTATUS VFSM_PlayDataTransfer(IN SChnl *
+ 						pstHostSpeechData->uiBufferLength - pstFrameData->uiBufferSizeLeft, 
+ 						FRAME_HEADER_LEN);
+ 
+-				if (pstFrameData->pucFrameBuffer == NULL)
+-					goto finish;	
++				if (!pstFrameData->pucFrameBuffer)
++				{
++					Status = VAPI_ERR_UNDEFINED;
++					goto finish;
++				}
+ 	
+ 				pstFrameData->uiFrameLen = UT_LE2CPU16(*((U16 *) pstFrameData->pucFrameBuffer + OFFSET_FOR_BUF_LEN));
+ 
+@@ -792,8 +810,11 @@ VSTATUS VFSM_PlayDataTransfer(IN SChnl *
+ 						pstHostSpeechData->uiBufferLength - pstFrameData->uiBufferSizeLeft, 
+ 						pstFrameData->uiFrameLen);
+ 
+-				if (pstFrameData->pucFrameBuffer == NULL)
++				if (!pstFrameData->pucFrameBuffer)
++				{
++					Status = VAPI_ERR_UNDEFINED;
+ 					goto finish;
++				}
+ 
+ 				UT_MemCopy(pucFrameBufferWithHeader, pstFrameData->pucFrameBuffer, pstFrameData->uiFrameLen);
+ 			}
+@@ -803,8 +824,11 @@ VSTATUS VFSM_PlayDataTransfer(IN SChnl *
+ 						pstHostSpeechData->uiBufferLength - pstFrameData->uiBufferSizeLeft, 
+ 						uiFrameLenConst * uiNumberOfFrames);
+ 
+-				if (pstFrameData->pucFrameBuffer == NULL)
++				if (!pstFrameData->pucFrameBuffer)
++				{
++					Status = VAPI_ERR_UNDEFINED;
+ 					goto finish;
++				}
+ 									
+ 				*((U32 *) pucFrameBufferWithHeader + OFFSET_FOR_TIMESTAMP) = UT_CPU2LE32(pstFrameData->uiFrameTimeStamp);
+ 				*((U16 *) pucFrameBufferWithHeader + OFFSET_FOR_FRAME_TYPE) = UT_CPU2LE16(1);

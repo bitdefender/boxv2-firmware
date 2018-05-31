@@ -1,0 +1,19 @@
+SOURCE : rp-pppoe 3.8 version package took from Openwrt packages base and revision is 10159(It is not updated to the Attitude Adjustment 12.09 packages branch)
+SOURCE PATH : https://dev.openwrt.org/browser/packages/net/rp-pppoe/?rev=10159
+SUPPORT : pppoe relay
+CHANGES : 
+1. Makefile 
+	- cmm dependancy changes added.
+	- GUI support added.
+2. pppoerelay : This is GUI pppoerelay configuration file.
+3. pppoe-relay.default : Removed the vlan1 option and added eth0 option.
+4. syspppoerelay : 
+	- Changed the init order to execute this after fast path enable.
+	- GUI configuration changes.
+5. pppoe-server.default : default option removed.
+6. network-pppoerelay.sh : GUI configuration file.
+7.  101-FSL-configure.patch : Remove to restrictive -ansi compile option. Needed for CMM lib link
+8.  102-FSL-ldflags.patch : Add ld flags
+9.  200-FSL-cmmlib.patch : To compile with cmm library.
+10. 201-FSL-comcerto-fpp-relay.patch : Support PPPoE-Relay fast path.
+

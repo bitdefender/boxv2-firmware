@@ -1,0 +1,5 @@
+#!/bin/sh
+/etc/init.d/cmm disable 
+/etc/init.d/fci disable 
+/etc/init.d/fpp disable 
+/etc/init.d/fpp_enable disable 

@@ -1,0 +1,14 @@
+Index: uhttpd-2015-11-08/lua.c
+===================================================================
+--- uhttpd-2015-11-08.orig/lua.c
++++ uhttpd-2015-11-08/lua.c
+@@ -378,6 +378,9 @@ static void lua_handle_request(struct cl
+ 
+ static bool check_lua_url(const char *url)
+ {
++	if (conf.lua_prefix[0] == '/' && conf.lua_prefix[1] == '\0')
++		return url && url[0] == '/';
++
+ 	return ops->path_match(conf.lua_prefix, url);
+ }
+ 

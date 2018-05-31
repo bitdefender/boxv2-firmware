@@ -1,0 +1,10 @@
+# change default priority so "slow" packets use only queues 0-7
+config ifname eth0
+	option priority 7
+
+config ifname eth2
+	option priority 7
+
+config ifname eth3
+	option priority 7
+

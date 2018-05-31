@@ -1,0 +1,14 @@
+SOURCE:This has been taken from barrier breaker packages 14.07 of revison 44441
+       Openwrt package repository for Chaos Calmer have the same package version as that BB
+URL:https://dev.openwrt.org/browser/branches/packages_14.07/libs/libdlna?rev=44441
+SUPPORT : DLNA support to ushare. Ushare package requires this one.
+CHANGES:
+No Changes
+The patch in AA is not required here.That Change is already updated
+
+CC Info:
+GIT LOG:
+commit 6c0569db46d8b53d0fd12b08c3cda70f691f0d60
+Author: nico <nico@3c298f89-4303-0410-b956-a3cf2f4a3e73>
+Date:   Sat Apr 18 23:46:37 2015 +0000
+Title: sctp: moved to github

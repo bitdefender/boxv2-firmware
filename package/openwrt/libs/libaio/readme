@@ -1,0 +1,7 @@
+SOURCE : libaio 0.3.107 version package took from the Openwrt Attitude Adjustment 12.09 packages base and SVN revision is 36089.
+SOURCE PATH : https://dev.openwrt.org/browser/branches/packages_12.09/libs/libaio/?rev=36089
+SUPPORT : AIO support to iscsi-tgt. iscsi-tgt package requires this one.
+CHANGES : None
+
+
+

@@ -1,0 +1,16 @@
+diff -Naur asterisk-1.8/configure asterisk-1.8.mod/configure
+--- asterisk-1.8/configure	2011-01-31 22:24:34.000000000 +0530
++++ asterisk-1.8.mod/configure	2013-04-16 17:52:24.000925000 +0530
+@@ -22306,9 +22306,9 @@
+   { echo "$as_me:$LINENO: result: yes" >&5
+ echo "${ECHO_T}yes" >&6; }
+ 
+-cat >>confdefs.h <<\_ACEOF
+-#define HAVE_RES_NINIT 1
+-_ACEOF
++#cat >>confdefs.h <<\_ACEOF
++##define HAVE_RES_NINIT 1
++#_ACEOF
+ 
+ 	{ echo "$as_me:$LINENO: checking for library containing res_9_ndestroy" >&5
+ echo $ECHO_N "checking for library containing res_9_ndestroy... $ECHO_C" >&6; }

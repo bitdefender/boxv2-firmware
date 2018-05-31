@@ -1,0 +1,150 @@
+diff --git a/include/linux/skbuff.h b/include/linux/skbuff.h
+index 4120a89..8b99c61 100644
+--- a/include/linux/skbuff.h
++++ b/include/linux/skbuff.h
+@@ -472,6 +472,8 @@ static inline u32 skb_mstamp_us_delta(const struct skb_mstamp *t1,
+  *	@nfct: Associated connection, if any
+  *	@nf_bridge: Saved data about a bridged frame - see br_netfilter.c
+  *	@skb_iif: ifindex of device we arrived on
++ *	@iif_index: ifindex of device we arrived on,now skb->skb_iif
++ *	            always tracks skb->dev
+  *	@tc_index: Traffic control index
+  *	@tc_verd: traffic control verdict
+  *	@hash: the packet hash
+@@ -671,6 +673,11 @@ struct sk_buff {
+ 	__u32 			mspd_len;
+ 	__u32 			mspd_ofst;
+ #endif
++#ifdef CONFIG_CPE_FAST_PATH
++	/* skb->skb_iif always tracks skb->dev, so a new variable is introduced 
++           to keep incoming interface intact */
++	int			iif_index;
++#endif
+ 	unsigned int		truesize;
+ 	atomic_t		users;
+ };
+diff --git a/net/core/dev.c b/net/core/dev.c
+index 68aba6a..08be8f6 100644
+--- a/net/core/dev.c
++++ b/net/core/dev.c
+@@ -3608,6 +3608,13 @@ static int __netif_receive_skb_core(struct sk_buff *skb, bool pfmemalloc)
+ 
+ 	trace_netif_receive_skb(skb);
+ 
++#ifdef CONFIG_CPE_FAST_PATH
++	/* ifindex of device we arrived on,now skb->skb_iif
++	   always tracks skb->dev */	
++	if (!skb->iif_index)
++		skb->iif_index = skb->dev->ifindex;
++#endif
++
+ 	orig_dev = skb->dev;
+ 
+ 	skb_reset_network_header(skb);
+@@ -4153,6 +4160,9 @@ static void napi_reuse_skb(struct napi_struct *napi, struct sk_buff *skb)
+ 	skb->vlan_tci = 0;
+ 	skb->dev = napi->dev;
+ 	skb->skb_iif = 0;
++#ifdef CONFIG_CPE_FAST_PATH
++	skb->iif_index = 0;
++#endif
+ 	skb->encapsulation = 0;
+ 	skb_shinfo(skb)->gso_type = 0;
+ 	skb->truesize = SKB_TRUESIZE(skb_end_offset(skb));
+diff --git a/net/core/skbuff.c b/net/core/skbuff.c
+index 19a0682..fbc57ca 100644
+--- a/net/core/skbuff.c
++++ b/net/core/skbuff.c
+@@ -169,6 +169,9 @@ struct sk_buff *__alloc_skb_head(gfp_t gfp_mask, int node)
+ 	 * the tail pointer in struct sk_buff!
+ 	 */
+ 	memset(skb, 0, offsetof(struct sk_buff, tail));
++#ifdef CONFIG_CPE_FAST_PATH
++	skb->iif_index = 0;
++#endif
+ 	skb->head = NULL;
+ 	skb->truesize = sizeof(struct sk_buff);
+ 	atomic_set(&skb->users, 1);
+@@ -254,6 +257,9 @@ struct sk_buff *__alloc_skb(unsigned int size, gfp_t gfp_mask,
+ 	skb->mspd_data = NULL;
+ 	skb->mspd_len = 0;
+ #endif
++#ifdef CONFIG_CPE_FAST_PATH
++	skb->iif_index = 0;
++#endif
+ 	/* make sure we initialize shinfo sequentially */
+ 	shinfo = skb_shinfo(skb);
+ 	memset(shinfo, 0, offsetof(struct skb_shared_info, dataref));
+@@ -344,6 +350,9 @@ struct sk_buff *__alloc_skb_header(unsigned int size, void *data, gfp_t gfp_mask
+ 	skb->mspd_data = NULL;
+ 	skb->mspd_len = 0;
+ #endif
++#ifdef CONFIG_CPE_FAST_PATH
++	skb->iif_index = 0;
++#endif
+ 
+ 	/* make sure we initialize shinfo sequentially */
+ 	shinfo = skb_shinfo(skb);
+@@ -399,6 +408,9 @@ struct sk_buff *build_skb(void *data, unsigned int frag_size)
+ 	size -= SKB_DATA_ALIGN(sizeof(struct skb_shared_info));
+ 
+ 	memset(skb, 0, offsetof(struct sk_buff, tail));
++#ifdef CONFIG_CPE_FAST_PATH
++	skb->iif_index = 0;
++#endif
+ 	skb->truesize = SKB_TRUESIZE(size);
+ 	skb->head_frag = frag_size != 0;
+ 	atomic_set(&skb->users, 1);
+@@ -907,6 +919,9 @@ static void __copy_skb_header(struct sk_buff *new, const struct sk_buff *old)
+         new->ipsec_offload      = old->ipsec_offload;
+         new->ipsec_xfrm_dir     = old->ipsec_xfrm_dir;
+ #endif
++#ifdef CONFIG_CPE_FAST_PATH
++	new->iif_index          = old->iif_index;
++#endif
+ 	memcpy(&new->headers_start, &old->headers_start,
+ 	       offsetof(struct sk_buff, headers_end) -
+ 	       offsetof(struct sk_buff, headers_start));
+@@ -4293,6 +4308,9 @@ void skb_scrub_packet(struct sk_buff *skb, bool xnet)
+ 	skb->tstamp.tv64 = 0;
+ 	skb->pkt_type = PACKET_HOST;
+ 	skb->skb_iif = 0;
++#ifdef CONFIG_CPE_FAST_PATH
++	skb->iif_index = 0;
++#endif
+ 	skb->ignore_df = 0;
+ 	skb_dst_drop(skb);
+ 	skb->mark = 0;
+diff --git a/net/netfilter/comcerto_fp_netfilter.c b/net/netfilter/comcerto_fp_netfilter.c
+index 2fa9d3f..07fdfcc 100644
+--- a/net/netfilter/comcerto_fp_netfilter.c
++++ b/net/netfilter/comcerto_fp_netfilter.c
+@@ -44,7 +44,7 @@ static unsigned int fp_netfilter_pre_routing(int family, const struct nf_hook_op
+ 	dir = CTINFO2DIR(ctinfo);
+ 
+ 	//	if (printk_ratelimit())
+-	//		printk(KERN_INFO "ct: %lx, dir: %x, mark: %x, ifindex: %d iif: %d\n", (unsigned long)ct, dir, skb->mark, skb->dev->ifindex, skb->skb_iif);
++	//		printk(KERN_INFO "ct: %lx, dir: %x, mark: %x, ifindex: %d skb_iif: %d iif_index %d \n", (unsigned long)ct, dir, skb->mark, skb->dev->ifindex, skb->skb_iif,skb->iif_index);
+ 
+ 	/* We could also check for changes and notify userspace (or print message) */
+ 	if (dir == IP_CT_DIR_ORIGINAL) {
+@@ -60,15 +60,14 @@ static unsigned int fp_netfilter_pre_routing(int family, const struct nf_hook_op
+ 	if (fp_info->ifindex && (fp_info->ifindex != skb->dev->ifindex))
+ 		if (printk_ratelimit())
+ 			printk(KERN_INFO "ct: ifindex changed %d, %d\n", fp_info->ifindex, skb->dev->ifindex);
+-
+-	if (fp_info->iif && (fp_info->iif != skb->skb_iif))
++	if (fp_info->iif && (fp_info->iif != skb->iif_index))
+ 		if (printk_ratelimit())
+-			printk(KERN_INFO "ct: iif changed %d, %d\n", fp_info->iif, skb->skb_iif);
++			printk(KERN_INFO "ct: iif changed %d, %d\n", fp_info->iif, skb->iif_index);
+ 
+ 	fp_info->mark = skb->mark;
+ 	fp_info->ifindex = skb->dev->ifindex;
+-	fp_info->iif = skb->skb_iif;
+-
++	/* now skb_iif always tracks dev,so iif_index stores incoming interface */
++	fp_info->iif = skb->iif_index;
+ done:
+ 	return NF_ACCEPT;
+ }

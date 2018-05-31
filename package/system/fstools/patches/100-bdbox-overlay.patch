@@ -1,0 +1,80 @@
+Index: fstools-2015-05-24/libfstools/mount.c
+===================================================================
+--- fstools-2015-05-24.orig/libfstools/mount.c
++++ fstools-2015-05-24/libfstools/mount.c
+@@ -138,7 +138,7 @@ int
+ ramoverlay(void)
+ {
+ 	mkdir("/tmp/root", 0755);
+-	mount("tmpfs", "/tmp/root", "tmpfs", MS_NOATIME, "mode=0755");
++	mount("tmpfs", "/tmp/root", "tmpfs", MS_NOATIME, "mode=0755,size=128M");
+ 
+ 	return fopivot("/tmp/root", "/rom");
+ }
+Index: fstools-2015-05-24/mount_root.c
+===================================================================
+--- fstools-2015-05-24.orig/mount_root.c
++++ fstools-2015-05-24/mount_root.c
+@@ -14,12 +14,43 @@
+ #include <sys/mount.h>
+ #include <stdio.h>
+ #include <stdlib.h>
++#include <unistd.h>
++#include <fcntl.h>
+ 
+ #include <libubox/ulog.h>
+ 
+ #include "libfstools/libfstools.h"
+ #include "libfstools/volume.h"
+ 
++#define CMDLINE_SIZE 512
++
++static char* get_cmdline_val(const char* name, char* out, int len)
++{
++	char line[CMDLINE_SIZE + 1], *c, *sptr;
++	int fd = open("/proc/cmdline", O_RDONLY);
++	ssize_t r = read(fd, line, sizeof(line) - 1);
++	close(fd);
++
++	if (r <= 0)
++		return NULL;
++
++	line[r] = 0;
++
++	for (c = strtok_r(line, " \t\n", &sptr); c;
++			c = strtok_r(NULL, " \t\n", &sptr)) {
++		char *sep = strchr(c, '=');
++		ssize_t klen = sep - c;
++		if (klen < 0 || strncmp(name, c, klen) || name[klen] != 0)
++			continue;
++
++		strncpy(out, &sep[1], len);
++		out[len-1] = 0;
++		return out;
++	}
++
++	return NULL;
++}
++
+ /*
+  * Called in the early (PREINIT) stage, when we immediately need some writable
+  * filesystem.
+@@ -29,6 +60,7 @@ start(int argc, char *argv[1])
+ {
+ 	struct volume *root;
+ 	struct volume *data = volume_find("rootfs_data");
++    char buff[10] = {};
+ 
+ 	if (!getenv("PREINIT"))
+ 		return -1;
+@@ -38,6 +70,10 @@ start(int argc, char *argv[1])
+ 		volume_init(root);
+ 		ULOG_NOTE("mounting /dev/root\n");
+ 		mount("/dev/root", "/", NULL, MS_NOATIME | MS_REMOUNT, 0);
++		if (get_cmdline_val("bdbox.bootstrap", buff, sizeof(buff))) {
++			ULOG_INFO("Mounting ramfs overlay");
++			return ramoverlay();
++		}
+ 	}
+ 
+ 	/*

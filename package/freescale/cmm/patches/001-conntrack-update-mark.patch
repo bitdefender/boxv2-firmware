@@ -1,0 +1,21 @@
+diff -pub cmm-5.07.2_orig/src/conntrack.c cmm-5.07.2/src/conntrack.c
+--- cmm-5.07.2_orig/src/conntrack.c
++++ cmm-5.07.2/src/conntrack.c
+@@ -2146,11 +2146,17 @@
+ 			}
+ 			else
+ 			{
+-				cmm_print(DEBUG_INFO, "%s: TCP connection %s(%#x) %s(%#x) missing state attribute\n", __func__,
++				u_int32_t mark = nfct_get_attr_u32(ct, ATTR_MARK) & 0xf;
++				cmm_print(DEBUG_INFO, "%s: TCP connection %s(%#x) %s(%#x) mark %u missing state attribute\n", __func__,
+ 							conntrack_event_type(type), type,
+-							conntrack_status(status), status);
++							conntrack_status(status), status, mark);
++				if (mark == 3) {
++					rc = __cmmCtRegister(ctx->fci_handle, ctx->handle, ct, ctEntry, ORIGINATOR | REPLIER);
++				} else if (mark == 6) {
++					rc = __cmmCtRegister(ctx->fci_handle, ctx->handle, ct, ctEntry, REPLIER);
++				}
+ 				goto exit;
+ 			}
+ 

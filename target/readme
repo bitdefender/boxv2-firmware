@@ -1,0 +1,24 @@
+CHANGES :
+Chaos Calmer SDK-Changes
+A. Target architecture changes
+1. comcerto2000 architecture support added under target/linux directory.
+2. Deleted all other architecture directories.
+3. comcerto2000 base-files changes are added under target/linux/comcerto2000/base-files directory. The changes are:
+   a.The etc/hotplug.d directory were replaced with Chaos Calmer sdk basefiles hotplug.d
+   b.hotplug2.initrules file is deleted 
+   c. 3.19 kernel support added.
+4.In GPP ,HGW,HGW_NAS,NAS directories
+ a. In config-3.2 file some more configurations are added
+ b. In target.mk file CPU_TYPE is added
+5. patches-3.3 and config-3.3 are removed from target/linux/generic directory
+6. ls1043a architecture support added under target/linux directory.
+   a. Added kernel config file as config-3.19 at target/linux/ls1043a
+   b. Updated the Makefile with current git path.
+   c. In config-3.19 file, more configurations are added
+   d. network config added.
+   e. HGW config for kernel 3.19 version added.
+   f. ITB file generation changes.
+7. target/Config.in: UBIFS enabled for c2k.
+
+
+

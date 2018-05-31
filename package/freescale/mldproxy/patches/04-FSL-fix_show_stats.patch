@@ -1,0 +1,11 @@
+--- Gateway.old/show_stat.c	2004-10-11 05:26:11.000000000 -0400
++++ Gateway/show_stat.c	2007-11-19 18:58:56.091756000 -0500
+@@ -63,7 +63,7 @@ int main(void)
+ 	
+ 	sleep(2);	/* waits until the stat file is generated */
+ 	
+-	if ( (stat_f = fopen("./MLD_Proxy.stat", "r")) != NULL )
++	if ( (stat_f = fopen("/tmp/MLD_Proxy.stat", "r")) != NULL )
+ 	{
+ 		while(fgets(buffer, 255,stat_f) != '\0')
+ 		{

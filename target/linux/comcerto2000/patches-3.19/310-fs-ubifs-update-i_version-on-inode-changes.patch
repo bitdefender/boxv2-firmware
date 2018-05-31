@@ -1,0 +1,22 @@
+diff --git a/fs/ubifs/file.c b/fs/ubifs/file.c
+index d9ae86f96df7..29213724259b 100644
+--- a/fs/ubifs/file.c
++++ b/fs/ubifs/file.c
+@@ -1435,6 +1440,8 @@ static int update_mctime(struct inode *inode)
+ 
+ 		mutex_lock(&ui->ui_mutex);
+ 		inode->i_mtime = inode->i_ctime = ubifs_current_time(inode);
++		if (IS_I_VERSION(inode))
++			inode_inc_iversion(inode);
+ 		release = ui->dirty;
+ 		mark_inode_dirty_sync(inode);
+ 		mutex_unlock(&ui->ui_mutex);
+@@ -1580,6 +1587,8 @@ static int ubifs_vm_page_mkwrite(struct vm_fault *vmf)
+ 
+ 		mutex_lock(&ui->ui_mutex);
+ 		inode->i_mtime = inode->i_ctime = ubifs_current_time(inode);
++		if (IS_I_VERSION(inode))
++			inode_inc_iversion(inode);
+ 		release = ui->dirty;
+ 		mark_inode_dirty_sync(inode);
+ 		mutex_unlock(&ui->ui_mutex);

@@ -1,0 +1,3 @@
+CHANGES :
+1. 002-FSL-fix_get_opt_conflict.patch : To avoid conflict between internal include/getopt.h functions and usr/include/getopt.h (installed by binutils package)
+

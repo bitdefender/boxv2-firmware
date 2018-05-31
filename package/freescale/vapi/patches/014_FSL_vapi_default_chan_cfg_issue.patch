@@ -1,0 +1,12 @@
+diff -Naur vapi-2.18.4.orig/VAPI/common/vapi/connection_itf.c vapi-2.18.4/VAPI/common/vapi/connection_itf.c
+--- vapi-2.18.4.orig/VAPI/common/vapi/connection_itf.c	2014-05-12 12:53:56.000000000 +0300
++++ vapi-2.18.4/VAPI/common/vapi/connection_itf.c	2016-03-21 19:33:10.036309188 +0200
+@@ -533,6 +533,8 @@
+ 		goto err_chnl;
+ 	}
+ 
++	UT_MemSet(pstChnl->pstChnlParams, 0, sizeof(SVoIPChnlParams));
++
+ 	/* Init default internal variables to match the MSP default values 
+ 	in case of VoIP or FoIP channel type*/
+ 	if (pstChnl->usConnType == eVOIP || pstChnl->usConnType == eVOIPOSHM || pstChnl->usConnType == eFOIP)

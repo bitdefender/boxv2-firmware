@@ -1,0 +1,11 @@
+--- a/setup.py
++++ b/setup.py
+@@ -1501,7 +1501,7 @@ class PyBuildExt(build_ext):
+         self.extensions.extend(exts)
+ 
+         # Call the method for detecting whether _tkinter can be compiled
+-        self.detect_tkinter(inc_dirs, lib_dirs)
++        #self.detect_tkinter(inc_dirs, lib_dirs)
+ 
+         if '_tkinter' not in [e.name for e in self.extensions]:
+             missing.append('_tkinter')

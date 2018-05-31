@@ -1,0 +1,121 @@
+--- a/crypto/ocf/cryptosoft.c	2018-02-16 15:46:09.690335019 +0200
++++ a/crypto/ocf/cryptosoft.c	2018-02-16 15:51:18.182137099 +0200
+@@ -431,19 +431,42 @@
+ 		if ((*swd)->sw_type & SW_TYPE_BLKCIPHER) {
+ 			dprintk("%s crypto_alloc_*blkcipher(%s, 0x%x)\n", __FUNCTION__,
+ 					algo, mode);
++			
++			if (swcr_no_ablk) {
++				(*swd)->sw_tfm = NULL;
++			} else {
++				/* try async first */
++				struct crypto_ablkcipher *ablkcipher =
++						crypto_alloc_ablkcipher(algo, 0, 0);
++				
++				if (IS_ERR(ablkcipher)) {
++					dprintk("%s crypto_alloc_ablkcipher failed\n", __FUNCTION__);
++					swcr_freesession(NULL, i);
++					return EINVAL;
++				}
++
++				(*swd)->sw_tfm = crypto_ablkcipher_tfm(ablkcipher);
++			}
+ 
+-			/* try async first */
+-			(*swd)->sw_tfm = swcr_no_ablk ? NULL :
+-					crypto_ablkcipher_tfm(crypto_alloc_ablkcipher(algo, 0, 0));
+ 			if ((*swd)->sw_tfm && !IS_ERR((*swd)->sw_tfm)) {
+ 				dprintk("%s %s cipher is async\n", __FUNCTION__, algo);
+ 				(*swd)->sw_type |= SW_TYPE_ASYNC;
+ 			} else {
+-				(*swd)->sw_tfm = crypto_blkcipher_tfm(
+-						crypto_alloc_blkcipher(algo, 0, CRYPTO_ALG_ASYNC));
++				struct crypto_blkcipher *blkcipher = 
++						crypto_alloc_blkcipher(algo, 0, CRYPTO_ALG_ASYNC);
++
++				if (IS_ERR(blkcipher)) {
++					dprintk("%s crypto_alloc_blkcipher failed\n", __FUNCTION__);
++					swcr_freesession(NULL, i);
++					return EINVAL;
++				}
++
++				(*swd)->sw_tfm = crypto_blkcipher_tfm(blkcipher);
++
+ 				if ((*swd)->sw_tfm && !IS_ERR((*swd)->sw_tfm))
+ 					dprintk("%s %s cipher is sync\n", __FUNCTION__, algo);
+ 			}
++
+ 			if (!(*swd)->sw_tfm || IS_ERR((*swd)->sw_tfm)) {
+ 				int err;
+ 				dprintk("cryptosoft: crypto_alloc_blkcipher failed(%s, 0x%x)\n",
+@@ -489,16 +512,38 @@
+ 			dprintk("%s crypto_alloc_*hash(%s, 0x%x)\n", __FUNCTION__,
+ 					algo, mode);
+ 
+-			/* try async first */
+-			(*swd)->sw_tfm = swcr_no_ahash ? NULL :
+-					crypto_ahash_tfm(crypto_alloc_ahash(algo, 0, 0));
++			if (swcr_no_ahash) {
++				(*swd)->sw_tfm = NULL;
++			} else {
++				/* try async first */
++
++				struct crypto_ahash *ahash = crypto_alloc_ahash(algo, 0, 0);
++
++				if (IS_ERR(ahash)) {
++					dprintk("%s crypto_alloc_ahash failed\n", __FUNCTION__);
++					swcr_freesession(NULL, i);
++					return EINVAL;
++				}
++
++				(*swd)->sw_tfm = crypto_ahash_tfm(ahash);
++			}
++
+ 			if ((*swd)->sw_tfm) {
+ 				dprintk("%s %s hash is async\n", __FUNCTION__, algo);
+ 				(*swd)->sw_type |= SW_TYPE_ASYNC;
+ 			} else {
++				struct crypto_hash *hash;
++
+ 				dprintk("%s %s hash is sync\n", __FUNCTION__, algo);
+-				(*swd)->sw_tfm = crypto_hash_tfm(
+-						crypto_alloc_hash(algo, 0, CRYPTO_ALG_ASYNC));
++
++				hash = crypto_alloc_hash(algo, 0, CRYPTO_ALG_ASYNC);
++				if (IS_ERR(hash)) {
++					dprintk("%s crypto_alloc_hash failed\n", __FUNCTION__);
++					swcr_freesession(NULL, i);
++					return EINVAL;
++				}
++
++				(*swd)->sw_tfm = crypto_hash_tfm(hash);
+ 			}
+ 
+ 			if (!(*swd)->sw_tfm) {
+@@ -527,14 +527,23 @@
+ 						crypto_hash_cast((*swd)->sw_tfm));
+ 			}
+ 		} else if ((*swd)->sw_type & SW_TYPE_COMP) {
+-			(*swd)->sw_tfm = crypto_comp_tfm(
+-					crypto_alloc_comp(algo, 0, CRYPTO_ALG_ASYNC));
+-			if (!(*swd)->sw_tfm) {
++			struct crypto_comp *comp = crypto_alloc_comp(algo, 0, CRYPTO_ALG_ASYNC);
++
++			if (IS_ERR(comp)) {
+ 				dprintk("cryptosoft: crypto_alloc_comp failed(%s,0x%x)\n",
+ 						algo, mode);
+ 				swcr_freesession(NULL, i);
+ 				return EINVAL;
+ 			}
++
++			(*swd)->sw_tfm = crypto_comp_tfm(comp);
++			if (!(*swd)->sw_tfm) {
++				dprintk("cryptosoft: crypto_alloc_comp sw_tfm is NULL(%s,0x%x)\n",
++						algo, mode);
++				swcr_freesession(NULL, i);
++				return EINVAL;
++			}
++
+ 			(*swd)->u.sw_comp_buf = kmalloc(CRYPTO_MAX_DATA_LEN, SLAB_ATOMIC);
+ 			if ((*swd)->u.sw_comp_buf == NULL) {
+ 				swcr_freesession(NULL, i);

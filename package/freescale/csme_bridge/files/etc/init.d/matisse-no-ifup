@@ -1,0 +1,76 @@
+#!/bin/sh /etc/rc.common
+# Copyright (C) 2006 OpenWrt.org
+
+START=49
+
+start() {
+	#Load Matisse modules
+	insmod common
+	insmod csm csm_encaps_net_dev=eth1 csm_encaps_enabled=1
+	insmod ip_itf 
+	insmod dci
+
+	/etc/init.d/tempo-slic start
+
+	#Create matisse nodes if not present
+	if [ ! -c /dev/dci0 ]
+		then mknod /dev/dci0 c 121 0
+	fi
+
+	if [ ! -c /dev/csm0 ]
+		then mknod /dev/csm0 c 122 0
+	fi
+
+	if [ ! -c /dev/m821xx0 ]
+		then mknod /dev/m821xx0 c 246 0
+	fi
+
+	if [ ! -c /dev/m83xxx0 ]
+		then mknod /dev/m83xxx0 c 247 0
+	fi
+	
+	if [ ! -c /dev/m829xx0 ]
+		then mknod /dev/m829xx0 c 245 0
+	fi
+
+	if [ ! -c /dev/sti ]
+		then mknod /dev/sti c 242 0
+	fi
+
+	if [ ! -c /dev/wan0 ]
+		then mknod /dev/wan0 c 125 0
+	fi
+
+	if [ ! -c /dev/pri ]
+		then mknod /dev/pri c 251 0
+	fi
+
+	if [ ! -c /dev/bt8370_0 ]
+		then mknod /dev/bt8370_0 c 124 0
+	fi
+
+	if [ ! -c /dev/bt847x ]
+		then mknod /dev/bt847x c 240 0
+	fi
+
+	if [ ! -c /dev/gateway ]
+		then mknod /dev/gateway c 120 0
+	fi
+
+	#Initialize Matisse driver
+	csm_app -o -c > /dev/null 2> /dev/null
+	csm_app -o -r > /dev/null 2> /dev/null
+	dci_app -c > /dev/null 2> /dev/null
+	dci_app -i0 > /dev/null 2> /dev/null
+}
+
+
+stop(){
+	/etc/init.d/tempo-slic stop
+
+	rmmod dci
+	rmmod ip_itf 
+	rmmod csm
+	rmmod common
+	
+}

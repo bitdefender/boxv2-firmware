@@ -1,0 +1,5 @@
+This is freescale prepared package.
+CHANGES:
+1. Patches : Patches added under patches directory. These are freescale changes.
+2. MLD_Proxy.cfg : Configuration file MLD_Proxy.cfg added under files directory.
+3. mldproxy.init : This is init script file to run mldproxy.

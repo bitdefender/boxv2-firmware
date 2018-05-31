@@ -1,0 +1,12 @@
+--- a/lua.c	2017-07-21 00:03:30.498521507 +0300
++++ a/lua.c	2017-07-21 00:03:40.446346491 +0300
+@@ -17,6 +17,9 @@
+  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+  */
+ 
++#define _GNU_SOURCE
++#include <fcntl.h>
++
+ #include <libubox/blobmsg.h>
+ #include <lua.h>
+ #include <lauxlib.h>

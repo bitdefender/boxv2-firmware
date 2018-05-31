@@ -1,0 +1,9 @@
+Could not find the SOURCE PATH for the version of the package being used in the SDK.
+Adding source path that is closest to the one currently being used in the SDK.
+
+SOURCE PATH : https://dev.openwrt.org/browser/branches/chaos_calmer/package/network/ipv6/ds-lite
+SUPPORT : Act as B4 element in DS-Lite architecture
+CHANGES : 
+1  Added new config file dslite.config to files/ directory.
+2  Made changes to dslite.init to use ip tool for adding/deleting tunnels.
+

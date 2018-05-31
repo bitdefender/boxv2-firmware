@@ -1,0 +1,24 @@
+Index: uClibc-ng-1.0.22/include/features.h
+===================================================================
+--- uClibc-ng-1.0.22.orig/include/features.h
++++ uClibc-ng-1.0.22/include/features.h
+@@ -91,6 +91,7 @@
+ 
+ 
+ /* Undefine everything, so we get a clean slate.  */
++#undef	__USE_ISOC11
+ #undef	__USE_ISOC99
+ #undef	__USE_ISOC95
+ #undef	__USE_POSIX
+@@ -139,6 +140,11 @@
+ #endif
+ 
+ 
++#if __GNUC_PREREQ(7, 0) || defined(__clang__)
++#define __USE_ISOC11	1
++#endif
++
++
+ /* If _BSD_SOURCE was defined by the user, favor BSD over POSIX.  */
+ #if defined _BSD_SOURCE && \
+     !(defined _POSIX_SOURCE || defined _POSIX_C_SOURCE || \

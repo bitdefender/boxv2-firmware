@@ -1,0 +1,12 @@
+CHANGES:
+
+1. 001-FSL-mc4-changes.patch : To support FPP IPv4 multicast.
+
+The below patch is not required which in present in AA
+2. 002-MSPD-makefile-cflags.patch : To avoid miss CFLAGS sent from the openwrt package.
+
+
+
+Changes:Pending
+1. igmpproxy.conf : change igmpproxy default config to wan->lan
+

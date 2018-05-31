@@ -1,0 +1,366 @@
+Index: u-boot-2013.01/common/cmd_mtdparts.c
+===================================================================
+--- u-boot-2013.01.orig/common/cmd_mtdparts.c
++++ u-boot-2013.01/common/cmd_mtdparts.c
+@@ -106,6 +106,8 @@
+ #include <onenand_uboot.h>
+ #endif
+ 
++DECLARE_GLOBAL_DATA_PTR;
++
+ /* special size referring to all the remaining space in a partition */
+ #define SIZE_REMAINING		0xFFFFFFFF
+ 
+@@ -1537,6 +1539,7 @@ static int spread_partitions(void)
+ static int parse_mtdparts(const char *const mtdparts)
+ {
+ 	const char *p = mtdparts;
++	char mtdparts_buf[MTDPARTS_MAXLEN];
+ 	struct mtd_device *dev;
+ 	int err = 1;
+ 
+@@ -1549,7 +1552,12 @@ static int parse_mtdparts(const char *co
+ 	}
+ 
+ 	/* re-read 'mtdparts' variable, mtd_devices_init may be updating env */
+-	p = getenv("mtdparts");
++	if (gd->flags & GD_FLG_ENV_READY)
++		p = getenv("mtdparts");
++	else {
++		p = mtdparts_buf;
++		getenv_f("mtdparts", mtdparts_buf, MTDPARTS_MAXLEN);
++	}
+ 
+ 	if (strncmp(p, "mtdparts=", 9) != 0) {
+ 		printf("mtdparts variable doesn't start with 'mtdparts='\n");
+@@ -1704,6 +1712,7 @@ int mtdparts_init(void)
+ {
+ 	static int initialized = 0;
+ 	const char *ids, *parts;
++	char mtdparts_buf[MTDPARTS_MAXLEN];
+ 	const char *current_partition;
+ 	int ids_changed;
+ 	char tmp_ep[PARTITION_MAXLEN];
+@@ -1720,7 +1729,12 @@ int mtdparts_init(void)
+ 
+ 	/* get variables */
+ 	ids = getenv("mtdids");
+-	parts = getenv("mtdparts");
++	if (gd->flags & GD_FLG_ENV_READY)
++		parts = getenv("mtdparts");
++	else {
++		parts = mtdparts_buf;
++		getenv_f("mtdparts", mtdparts_buf, MTDPARTS_MAXLEN);
++	}
+ 	current_partition = getenv("partition");
+ 
+ 	/* save it for later parsing, cannot rely on current partition pointer
+Index: u-boot-2013.01/common/cmd_nvedit.c
+===================================================================
+--- u-boot-2013.01.orig/common/cmd_nvedit.c
++++ u-boot-2013.01/common/cmd_nvedit.c
+@@ -274,6 +274,9 @@ int setenv(const char *varname, const ch
+ {
+ 	const char * const argv[4] = { "setenv", varname, varvalue, NULL };
+ 
++	if (!(gd->flags & GD_FLG_ENV_READY))
++		return 1;
++
+ 	if (varvalue == NULL || varvalue[0] == '\0')
+ 		return _do_env_set(0, 2, (char * const *)argv);
+ 	else
+Index: u-boot-2013.01/common/cmd_ubi.c
+===================================================================
+--- u-boot-2013.01.orig/common/cmd_ubi.c
++++ u-boot-2013.01/common/cmd_ubi.c
+@@ -431,11 +431,75 @@ static int ubi_dev_scan(struct mtd_info
+ 	return 0;
+ }
+ 
++int ubi_part(const char *part_name, const char *vid_header_offset)
++{
++	int err = 0;
++	char mtd_dev[16];
++	struct mtd_device *dev;
++	u8 pnum;
++	struct part_info *part;
++
++	if (mtdparts_init() != 0) {
++		printf("Error initializing mtdparts!\n");
++		return 1;
++	}
++
++#ifdef CONFIG_CMD_UBIFS
++	/*
++	 * Automatically unmount UBIFS partition when user
++	 * changes the UBI device. Otherwise the following
++	 * UBIFS commands will crash.
++	 */
++	if (ubifs_is_mounted())
++		cmd_ubifs_umount();
++#endif
++
++	/* todo: get dev number for NAND... */
++	ubi_dev.nr = 0;
++
++	/*
++	 * Call ubi_exit() before re-initializing the UBI subsystem
++	 */
++	if (ubi_initialized) {
++		ubi_exit();
++		del_mtd_partitions(ubi_dev.mtd_info);
++	}
++
++	/*
++	 * Search the mtd device number where this partition
++	 * is located
++	 */
++	if (find_dev_and_part(part_name, &dev, &pnum, &part)) {
++		printf("Partition %s not found!\n", part_name);
++		return 1;
++	}
++	sprintf(mtd_dev, "%s%d", MTD_DEV_TYPE(dev->id->type), dev->id->num);
++	ubi_dev.mtd_info = get_mtd_device_nm(mtd_dev);
++	if (IS_ERR(ubi_dev.mtd_info)) {
++		printf("Partition %s not found on device %s!\n", part_name, mtd_dev);
++		return 1;
++	}
++
++	ubi_dev.selected = 1;
++
++	strcpy(ubi_dev.part_name, part_name);
++	err = ubi_dev_scan(ubi_dev.mtd_info, ubi_dev.part_name,
++			vid_header_offset);
++	if (err) {
++		printf("UBI init error %d\n", err);
++		ubi_dev.selected = 0;
++		return err;
++	}
++
++	ubi = ubi_devices[0];
++
++	return 0;
++}
++
+ static int do_ubi(cmd_tbl_t * cmdtp, int flag, int argc, char * const argv[])
+ {
+ 	size_t size = 0;
+ 	ulong addr = 0;
+-	int err = 0;
+ 
+ 	if (argc < 2)
+ 		return CMD_RET_USAGE;
+@@ -446,11 +510,7 @@ static int do_ubi(cmd_tbl_t * cmdtp, int
+ 	}
+ 
+ 	if (strcmp(argv[1], "part") == 0) {
+-		char mtd_dev[16];
+-		struct mtd_device *dev;
+-		struct part_info *part;
+ 		const char *vid_header_offset = NULL;
+-		u8 pnum;
+ 
+ 		/* Print current partition */
+ 		if (argc == 2) {
+@@ -467,58 +527,10 @@ static int do_ubi(cmd_tbl_t * cmdtp, int
+ 		if (argc < 3)
+ 			return CMD_RET_USAGE;
+ 
+-#ifdef CONFIG_CMD_UBIFS
+-		/*
+-		 * Automatically unmount UBIFS partition when user
+-		 * changes the UBI device. Otherwise the following
+-		 * UBIFS commands will crash.
+-		 */
+-		if (ubifs_is_mounted())
+-			cmd_ubifs_umount();
+-#endif
+-
+-		/* todo: get dev number for NAND... */
+-		ubi_dev.nr = 0;
+-
+-		/*
+-		 * Call ubi_exit() before re-initializing the UBI subsystem
+-		 */
+-		if (ubi_initialized) {
+-			ubi_exit();
+-			del_mtd_partitions(ubi_dev.mtd_info);
+-		}
+-
+-		/*
+-		 * Search the mtd device number where this partition
+-		 * is located
+-		 */
+-		if (find_dev_and_part(argv[2], &dev, &pnum, &part)) {
+-			printf("Partition %s not found!\n", argv[2]);
+-			return 1;
+-		}
+-		sprintf(mtd_dev, "%s%d", MTD_DEV_TYPE(dev->id->type), dev->id->num);
+-		ubi_dev.mtd_info = get_mtd_device_nm(mtd_dev);
+-		if (IS_ERR(ubi_dev.mtd_info)) {
+-			printf("Partition %s not found on device %s!\n", argv[2], mtd_dev);
+-			return 1;
+-		}
+-
+-		ubi_dev.selected = 1;
+-
+ 		if (argc > 3)
+ 			vid_header_offset = argv[3];
+-		strcpy(ubi_dev.part_name, argv[2]);
+-		err = ubi_dev_scan(ubi_dev.mtd_info, ubi_dev.part_name,
+-				vid_header_offset);
+-		if (err) {
+-			printf("UBI init error %d\n", err);
+-			ubi_dev.selected = 0;
+-			return err;
+-		}
+-
+-		ubi = ubi_devices[0];
+ 
+-		return 0;
++		return ubi_part(argv[2], vid_header_offset);
+ 	}
+ 
+ 	if ((strcmp(argv[1], "part") != 0) && (!ubi_dev.selected)) {
+Index: u-boot-2013.01/common/env_common.c
+===================================================================
+--- u-boot-2013.01.orig/common/env_common.c
++++ u-boot-2013.01/common/env_common.c
+@@ -176,7 +176,13 @@ int env_import(const char *buf, int chec
+ 		}
+ 	}
+ 
+-	if (himport_r(&env_htab, (char *)ep->data, ENV_SIZE, '\0', 0,
++#if defined(CONFIG_BOXV2)
++	const char sep = '\n';
++#else
++	const char sep = '\0';
++#endif
++
++	if (himport_r(&env_htab, (char *)ep->data, ENV_SIZE, sep, 0,
+ 			0, NULL)) {
+ 		gd->flags |= GD_FLG_ENV_READY;
+ 		return 1;
+Index: u-boot-2013.01/common/env_nand.c
+===================================================================
+--- u-boot-2013.01.orig/common/env_nand.c
++++ u-boot-2013.01/common/env_nand.c
+@@ -66,6 +66,10 @@ env_t *env_ptr;
+ 
+ DECLARE_GLOBAL_DATA_PTR;
+ 
++#if defined(CONFIG_BOXV2)
++static unsigned char env_loaded_from_ubi;
++#endif
++
+ /*
+  * This is called before nand_init() so we can't read NAND to
+  * validate env data.
+@@ -231,6 +235,14 @@ int saveenv(void)
+ 	char	*res;
+ 	nand_erase_options_t nand_erase_options;
+ 
++#if defined(CONFIG_BOXV2)
++	if (env_loaded_from_ubi) {
++		printf("persistent env saving is not allowed from u-boot\n"
++			"use dedicated tool from user space in order to update env in ubi\n");
++		return 1;
++	}
++#endif
++
+ 	memset(&nand_erase_options, 0, sizeof(nand_erase_options));
+ 	nand_erase_options.length = CONFIG_ENV_RANGE;
+ 	nand_erase_options.offset = CONFIG_ENV_OFFSET;
+@@ -327,6 +339,61 @@ int get_nand_env_oob(nand_info_t *nand,
+ }
+ #endif
+ 
++#ifdef CONFIG_BOXV2
++#include <ubi_uboot.h>
++#include "../fs/ubifs/ubifs.h"
++
++extern struct super_block *ubifs_sb;
++
++/**
++ * read u-boot env from ubi
++ * the "boot" mtd partition contains an ubi image, which has a "boot" volume
++ * the "env" file is located in the root directory (/) of the "boot" volume
++ */
++static int read_env_from_ubi(u_char *buf)
++{
++	int err = 0;
++
++	env_t *env_from_ubi = (env_t *)buf;
++
++	err = ubi_part("boot", NULL);
++	if (err) {
++		printf("failed to init ubi boot partition\n");
++		return err;
++	}
++
++	err = ubifs_init();
++	if (err) {
++		printf("failed to init ubifs\n");
++		return err;
++	}
++
++	err = ubifs_mount("boot");
++	if (err) {
++		printf("failed to mount ubi boot volume\n");
++		return err;
++	}
++
++	memset(env_from_ubi->data, 0, ENV_SIZE);
++
++	err = ubifs_load("/env/primary", env_from_ubi->data, ENV_SIZE);
++	if (err) {
++		printf("failed to load primary env file\n");
++
++		memset(env_from_ubi->data, 0, ENV_SIZE);
++
++		err = ubifs_load("/env/backup", env_from_ubi->data, ENV_SIZE);
++		if (err)
++			printf("failed to load backup env file\n");
++	}
++
++	ubifs_umount(ubifs_sb->s_fs_info);
++	ubifs_sb = NULL;
++
++	return err;
++}
++#endif
++
+ #ifdef CONFIG_ENV_OFFSET_REDUND
+ void env_relocate_spec(void)
+ {
+@@ -400,6 +467,17 @@ void env_relocate_spec(void)
+ 	int ret;
+ 	ALLOC_CACHE_ALIGN_BUFFER(char, buf, CONFIG_ENV_SIZE);
+ 
++#if defined(CONFIG_BOXV2)
++	ret = read_env_from_ubi((u_char *)buf);
++	if (!ret) {
++		printf("successfully read env from ubi\n");
++		if (env_import(buf, 0))
++			env_loaded_from_ubi = 1;
++		return;
++	} else
++		printf("failed to read env from ubi\n");
++#endif
++
+ #if defined(CONFIG_ENV_OFFSET_OOB)
+ 	ret = get_nand_env_oob(&nand_info[0], &nand_env_oob_offset);
+ 	/*
+Index: u-boot-2013.01/include/ubi_uboot.h
+===================================================================
+--- u-boot-2013.01.orig/include/ubi_uboot.h
++++ u-boot-2013.01/include/ubi_uboot.h
+@@ -215,6 +215,8 @@ extern int ubi_mtd_param_parse(const cha
+ extern int ubi_init(void);
+ extern void ubi_exit(void);
+ 
++int ubi_part(const char *part_name, const char *vid_header_offset);
++
+ extern struct ubi_device *ubi_devices[];
+ 
+ #endif

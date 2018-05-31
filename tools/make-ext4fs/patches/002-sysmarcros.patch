@@ -1,0 +1,12 @@
+Index: make-ext4fs-2015-05-01/contents.c
+===================================================================
+--- make-ext4fs-2015-05-01.orig/contents.c
++++ make-ext4fs-2015-05-01/contents.c
+@@ -14,6 +14,7 @@
+  * limitations under the License.
+  */
+ 
++#include <sys/sysmacros.h>
+ #include <sys/stat.h>
+ #include <string.h>
+ #include <stdio.h>

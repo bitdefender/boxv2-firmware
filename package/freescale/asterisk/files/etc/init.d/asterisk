@@ -1,0 +1,84 @@
+#!/bin/sh /etc/rc.common
+# Copyright (C) 2006 OpenWrt.org
+
+START=90
+
+DEFAULT=/etc/default/asterisk
+OPTIONS=""
+
+detect_hw() {
+    board_name=$(uci get asterisk.general.board_name)
+    proslic_phones=0
+    legerity_phones=0
+    if [ "$board_name" = "c1kmfcn-evm" ]; then
+        proslic_phones=2
+	if [ -d "/proc/legerity" ]; then
+    	    legerity_phones=2
+	fi
+    elif [ "$board_name" = "c1kevm" ]; then
+        proslic_phones=4
+    elif [ "$board_name" = "packet-iad" ]; then
+        legerity_phones=4
+    elif [ "$board_name" = "c2kasic" ] || [ "$board_name" = "c2kevm" ] || [ "$board_name" = "c2kmfcnevm" ];then
+	if [ -d "/proc/legerity" ]; then
+            legerity_phones=2
+        fi
+	if [ -d "/proc/proslic" ]; then
+            proslic_phones=2
+        fi
+    fi
+    uci set asterisk.general.proslic_phones=$proslic_phones
+    uci set asterisk.general.legerity_phones=$legerity_phones
+    uci set asterisk.general.analogphones=$(expr $proslic_phones + $legerity_phones)
+    uci commit asterisk
+}
+
+set_visible() {
+	if [ -d /www/cgi-bin/webif ]; then
+	  if [ $1 -eq 0 ]; then
+		### Making Telephony tab to invisible
+		sed -i 's/##WEBIF:category:Telephony/??WEBIF:category:Telephony/' /www/cgi-bin/webif/.categories
+	  else
+		### If Telephony tab is invisible make it to visible
+		sed -i 's/??WEBIF:category:Telephony/##WEBIF:category:Telephony/' /www/cgi-bin/webif/.categories
+	  fi
+	fi 
+}
+
+check_partno() {
+	if [ -e /proc/partno ]; then
+		### Checking for M83242G, M83252G, M83262G series
+		if [ "`grep "M832[4-6]2G" /proc/partno`" ]; then
+			echo "M83242G, M83252G, M83262G series are not supported"
+			set_visible 0
+			exit 1
+		fi
+	fi
+}
+
+start() {
+	echo Starting Asterisk...
+	#check_partno
+	detect_hw
+	set_visible 1
+
+	[ -f $DEFAULT ] && . $DEFAULT
+	[ -d /var/run ] || mkdir -p /var/run
+	[ -d /var/log/asterisk ] || mkdir -p /var/log/asterisk
+	[ -d /var/spool/asterisk ] || mkdir -p /var/spool/asterisk
+	[ -d /tmp/media/spool/asterisk/voicemail ] || mkdir -p /tmp/media/spool/asterisk/voicemail
+
+	#####updating asterisk configuration
+	/lib/asterisk/configure_asterisk
+
+	ifconfig eth1 169.254.0.1
+	/usr/sbin/asterisk $OPTIONS > /dev/null 2>&1
+	echo Done.
+}
+
+stop() {
+	echo Stopping Asterisk...
+	#check_partno
+	[ -f /var/run/asterisk.pid ] && kill $(cat /var/run/asterisk.pid) >/dev/null 2>&1
+	echo Done.
+}

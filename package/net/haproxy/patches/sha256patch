@@ -1,0 +1,225 @@
+diff --git a/include/types/listener.h b/include/types/listener.h
+index d06e4e7..2a53e64 100644
+--- a/include/types/listener.h
++++ b/include/types/listener.h
+@@ -118,6 +118,7 @@ enum li_state {
+ /* "bind" line settings */
+ struct bind_conf {
+ #ifdef USE_OPENSSL
++	char *fipr_file;           /* FIPR file to use on verify client certificate*/
+ 	char *ca_file;             /* CAfile to use on verify */
+ 	unsigned long long ca_ignerr;  /* ignored verify errors in handshake if depth > 0 */
+ 	unsigned long long crt_ignerr; /* ignored verify errors in handshake if depth == 0 */
+diff --git a/src/ssl_sock.c b/src/ssl_sock.c
+index 70c1326..cc28461 100644
+--- a/src/ssl_sock.c
++++ b/src/ssl_sock.c
+@@ -126,6 +126,7 @@ enum {
+ 	SSL_SOCK_VERIFY_REQUIRED = 1,
+ 	SSL_SOCK_VERIFY_OPTIONAL = 2,
+ 	SSL_SOCK_VERIFY_NONE     = 3,
++	SSL_SOCK_VERIFY_FIPR     = 4,
+ };
+ 
+ int sslconns = 0;
+@@ -1062,6 +1063,7 @@ int ssl_sock_bind_verifycbk(int ok, X509_STORE_CTX *x_store)
+ 
+ 	conn->xprt_st |= SSL_SOCK_ST_FL_VERIFY_DONE;
+ 
++
+ 	if (ok) /* no errors */
+ 		return ok;
+ 
+@@ -2679,6 +2681,50 @@ int ssl_sock_load_cert_list_file(char *file, struct bind_conf *bind_conf, struct
+ #define SSL_MODE_SMALL_BUFFERS 0
+ #endif
+ 
++int conv_bin2hex(unsigned char *smp, unsigned int smp_len)
++{
++	struct chunk *trash = get_trash_chunk();
++	unsigned char c;
++	int ptr = 0;
++
++	trash->len = 0;
++	while (ptr < smp_len && trash->len <= trash->size - 2) {
++		c = smp[ptr++];
++		trash->str[trash->len++] = hextab[(c >> 4) & 0xF];
++		trash->str[trash->len++] = hextab[c & 0xF];
++	}
++	
++	memcpy(smp, trash->str, trash->len);
++	return trash->len;
++}
++
++static int ssl_certificate_fingerprint_verify_callback(X509_STORE_CTX *ctx, void *arg)
++{
++	Alert("ssl_certificate_thumbprint_verify_callback\n");
++    unsigned char *fipr = (unsigned char *)arg;
++
++    X509 *cert = ctx->cert;
++
++    EVP_MD   *tempDigest;
++
++    unsigned char   tempFingerprint[EVP_MAX_MD_SIZE];
++
++    unsigned int      tempFingerprintLen;
++
++    tempDigest = (EVP_MD*)EVP_sha256( );
++
++    if ( X509_digest(cert, tempDigest, tempFingerprint, &tempFingerprintLen ) <= 0)
++
++       return 0;
++
++    tempFingerprintLen = conv_bin2hex(tempFingerprint, tempFingerprintLen);
++   	Alert("ssl_certificate_thumbprint_verify_callback %s \n", tempFingerprint);
++    if(!memcmp(tempFingerprint, fipr, tempFingerprintLen))
++       return 1;
++
++   	Alert("ssl_certificate_thumbprint_verify_callback failed \n%s\n%s \n", tempFingerprint, fipr);
++   	return 0;
++}
+ int ssl_sock_prepare_ctx(struct bind_conf *bind_conf, SSL_CTX *ctx, struct proxy *curproxy)
+ {
+ 	int cfgerr = 0;
+@@ -2755,9 +2801,40 @@ int ssl_sock_prepare_ctx(struct bind_conf *bind_conf, SSL_CTX *ctx, struct proxy
+ 		case SSL_SOCK_VERIFY_REQUIRED:
+ 			verify = SSL_VERIFY_PEER|SSL_VERIFY_FAIL_IF_NO_PEER_CERT;
+ 			break;
++		case SSL_SOCK_VERIFY_FIPR:
++			verify = SSL_VERIFY_PEER|SSL_VERIFY_FAIL_IF_NO_PEER_CERT;
++			break;
++	}
++
++	if (bind_conf->verify == SSL_SOCK_VERIFY_FIPR){
++		if (!bind_conf->fipr_file){
++			Alert("Proxy '%s': verify with client fipr is enabled but no fipr file specified for bind '%s' at [%s:%d].\n",
++			      curproxy->id, bind_conf->arg, bind_conf->file, bind_conf->line);
++
++			cfgerr++;
++		} 
++		else {
++			//read fipr from fipr_file
++			int fd = open(bind_conf->fipr_file, O_RDONLY);
++			if (fd == -1) {
++				Alert("Proxy '%s': verify with client fipr is enabled but fipr file specified for bind '%s' at [%s:%d] cannot be open. \n",
++			      curproxy->id, bind_conf->arg, bind_conf->file, bind_conf->line);
++
++				cfgerr++;		
++			}
++			else {
++				static unsigned char* client_certificate_fingerprint[65] = {0};
++				if (read(fd, &client_certificate_fingerprint, 64) != 64)
++					Alert("Proxy '%s': verify with client fipr is enabled but the file specified for bind is incomplete '%s' at [%s:%d].\n",
++			      			curproxy->id, bind_conf->arg, bind_conf->file, bind_conf->line);
++
++				SSL_CTX_set_cert_verify_callback(ctx, ssl_certificate_fingerprint_verify_callback, (void*)(client_certificate_fingerprint));
++			}
++		}
+ 	}
++
+ 	SSL_CTX_set_verify(ctx, verify, ssl_sock_bind_verifycbk);
+-	if (verify & SSL_VERIFY_PEER) {
++	if (bind_conf->verify != SSL_SOCK_VERIFY_FIPR && verify & SSL_VERIFY_PEER) {
+ 		if (bind_conf->ca_file) {
+ 			/* load CAfile to verify */
+ 			if (!SSL_CTX_load_verify_locations(ctx, bind_conf->ca_file, NULL)) {
+@@ -4405,6 +4482,50 @@ out:
+ 	return ret;
+ }
+ 
++/* binary, returns the client certificate's SHA-256 fingerprint (SHA-1 hash of DER-encoded certificate) in a binary chunk.
++ * The 5th keyword char is used to know if SSL_get_certificate or SSL_get_peer_certificate
++ * should be use.
++ */
++static int
++smp_fetch_ssl_x_sha2(const struct arg *args, struct sample *smp, const char *kw, void *private)
++{
++	int cert_peer = (kw[4] == 'c') ? 1 : 0;
++	X509 *crt = NULL;
++	const EVP_MD *digest;
++	int ret = 0;
++	struct chunk *smp_trash;
++	struct connection *conn;
++
++	conn = objt_conn(smp->sess->origin);
++	if (!conn || conn->xprt != &ssl_sock)
++		return 0;
++
++	if (!(conn->flags & CO_FL_CONNECTED)) {
++		smp->flags |= SMP_F_MAY_CHANGE;
++		return 0;
++	}
++
++	if (cert_peer)
++		crt = SSL_get_peer_certificate(conn->xprt_ctx);
++	else
++		crt = SSL_get_certificate(conn->xprt_ctx);
++	if (!crt)
++		goto out;
++
++	smp_trash = get_trash_chunk();
++	digest = EVP_sha256();
++	X509_digest(crt, digest, (unsigned char *)smp_trash->str, (unsigned int *)&smp_trash->len);
++
++	smp->data.u.str = *smp_trash;
++	smp->data.type = SMP_T_BIN;
++	ret = 1;
++out:
++	/* SSL_get_peer_certificate, it increase X509 * ref count */
++	if (cert_peer && crt)
++		X509_free(crt);
++	return ret;
++}
++
+ /* string, returns certificate's notafter date in ASN1_UTCTIME format.
+  * The 5th keyword char is used to know if SSL_get_certificate or SSL_get_peer_certificate
+  * should be use.
+@@ -5146,6 +5267,23 @@ smp_fetch_ssl_c_verify(const struct arg *args, struct sample *smp, const char *k
+ }
+ 
+ /* parse the "ca-file" bind keyword */
++static int bind_parse_fipr_file(char **args, int cur_arg, struct proxy *px, struct bind_conf *conf, char **err)
++{
++	if (!*args[cur_arg + 1]) {
++		if (err)
++			memprintf(err, "'%s' : missing FIPR file path", args[cur_arg]);
++		return ERR_ALERT | ERR_FATAL;
++	}
++
++	if ((*args[cur_arg + 1] != '/') && global.ca_base)
++		memprintf(&conf->fipr_file, "%s/%s", global.ca_base, args[cur_arg + 1]);
++	else
++		memprintf(&conf->fipr_file, "%s", args[cur_arg + 1]);
++
++	return 0;
++}
++
++/* parse the "ca-file" bind keyword */
+ static int bind_parse_ca_file(char **args, int cur_arg, struct proxy *px, struct bind_conf *conf, char **err)
+ {
+ 	if (!*args[cur_arg + 1]) {
+@@ -5638,6 +5776,8 @@ static int bind_parse_verify(char **args, int cur_arg, struct proxy *px, struct
+ 		conf->verify = SSL_SOCK_VERIFY_OPTIONAL;
+ 	else if (strcmp(args[cur_arg + 1], "required") == 0)
+ 		conf->verify = SSL_SOCK_VERIFY_REQUIRED;
++	else if (strcmp(args[cur_arg + 1], "fipr") == 0)
++		conf->verify = SSL_SOCK_VERIFY_FIPR;
+ 	else {
+ 		if (err)
+ 			memprintf(err, "'%s' : unknown verify method '%s', only 'none', 'optional', and 'required' are supported\n",
+@@ -6293,6 +6433,7 @@ static struct sample_fetch_kw_list sample_fetch_keywords = {ILH, {
+ 	{ "ssl_c_s_dn",             smp_fetch_ssl_x_s_dn,         ARG2(0,STR,SINT),    NULL,    SMP_T_STR,  SMP_USE_L5CLI },
+ 	{ "ssl_c_serial",           smp_fetch_ssl_x_serial,       0,                   NULL,    SMP_T_BIN,  SMP_USE_L5CLI },
+ 	{ "ssl_c_sha1",             smp_fetch_ssl_x_sha1,         0,                   NULL,    SMP_T_BIN,  SMP_USE_L5CLI },
++	{ "ssl_c_sha2",             smp_fetch_ssl_x_sha2,         0,                   NULL,    SMP_T_BIN,  SMP_USE_L5CLI },
+ 	{ "ssl_c_used",             smp_fetch_ssl_c_used,         0,                   NULL,    SMP_T_BOOL, SMP_USE_L5CLI },
+ 	{ "ssl_c_verify",           smp_fetch_ssl_c_verify,       0,                   NULL,    SMP_T_SINT, SMP_USE_L5CLI },
+ 	{ "ssl_c_version",          smp_fetch_ssl_x_version,      0,                   NULL,    SMP_T_SINT, SMP_USE_L5CLI },
+@@ -6345,6 +6486,7 @@ static struct acl_kw_list acl_kws = {ILH, {
+ static struct bind_kw_list bind_kws = { "SSL", { }, {
+ 	{ "alpn",                  bind_parse_alpn,            1 }, /* set ALPN supported protocols */
+ 	{ "ca-file",               bind_parse_ca_file,         1 }, /* set CAfile to process verify on client cert */
++	{ "fipr-file",             bind_parse_fipr_file,       1 }, /* set FIPRfile to process verify on client cert */
+ 	{ "ca-ignore-err",         bind_parse_ignore_err,      1 }, /* set error IDs to ignore on verify depth > 0 */
+ 	{ "ca-sign-file",          bind_parse_ca_sign_file,    1 }, /* set CAFile used to generate and sign server certs */
+ 	{ "ca-sign-pass",          bind_parse_ca_sign_pass,    1 }, /* set CAKey passphrase */

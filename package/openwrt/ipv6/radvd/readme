@@ -1,0 +1,11 @@
+SOURCE : radvd 1.9.1 version package took from Openwrt Attitude Adjustment 12.09 packages base and SVN revision is 36089
+         Openwrt package repository for Chaos Calmer have the same package version as that AA
+SOURCE PATH : https://dev.openwrt.org/browser/branches/packages_12.09/ipv6/radvd/?rev=36089
+SUPPORT : IPv6 Routing Advertisement Daemon
+CHANGES:
+No Changes
+
+GIT LOG:
+commit 6c0569db46d8b53d0fd12b08c3cda70f691f0d60
+Author: nico <nico@3c298f89-4303-0410-b956-a3cf2f4a3e73>
+Date:   Sat Apr 18 23:46:37 2015 +0000

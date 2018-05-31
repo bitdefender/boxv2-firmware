@@ -1,0 +1,3132 @@
+diff --git a/lib/talloc/talloc.c b/lib/talloc/talloc.c
+index 18ee548..5c7a5a3 100644
+--- a/lib/talloc/talloc.c
++++ b/lib/talloc/talloc.c
+@@ -113,14 +113,17 @@
+ static void *null_context;
+ static void *autofree_context;
+ 
++#ifdef SANITY_CHECKS
+ /* used to enable fill of memory on free, which can be useful for
+  * catching use after free errors when valgrind is too slow
+  */
+-static struct {
+-	bool initialised;
+-	bool enabled;
+-	uint8_t fill_value;
+-} talloc_fill;
++static bool talloc_fill_initialised;
++static bool talloc_fill_enabled;
++static uint8_t talloc_fill_fill_value;
++#else
++#define	talloc_fill_enabled	0
++#define	talloc_fill_fill_value	0
++#endif
+ 
+ #define TALLOC_FILL_ENV "TALLOC_FREE_FILL"
+ 
+@@ -129,10 +132,10 @@ static struct {
+  * double-free logic to still work
+  */
+ #define TC_INVALIDATE_FULL_FILL_CHUNK(_tc) do { \
+-	if (unlikely(talloc_fill.enabled)) { \
++	if (unlikely(talloc_fill_enabled)) { \
+ 		size_t _flen = (_tc)->size; \
+ 		char *_fptr = (char *)TC_PTR_FROM_CHUNK(_tc); \
+-		memset(_fptr, talloc_fill.fill_value, _flen); \
++		memset(_fptr, talloc_fill_fill_value, _flen); \
+ 	} \
+ } while (0)
+ 
+@@ -153,11 +156,11 @@ static struct {
+ } while (0)
+ 
+ #define TC_INVALIDATE_SHRINK_FILL_CHUNK(_tc, _new_size) do { \
+-	if (unlikely(talloc_fill.enabled)) { \
++	if (unlikely(talloc_fill_enabled)) { \
+ 		size_t _flen = (_tc)->size - (_new_size); \
+ 		char *_fptr = (char *)TC_PTR_FROM_CHUNK(_tc); \
+ 		_fptr += (_new_size); \
+-		memset(_fptr, talloc_fill.fill_value, _flen); \
++		memset(_fptr, talloc_fill_fill_value, _flen); \
+ 	} \
+ } while (0)
+ 
+@@ -179,11 +182,11 @@ static struct {
+ } while (0)
+ 
+ #define TC_UNDEFINE_SHRINK_FILL_CHUNK(_tc, _new_size) do { \
+-	if (unlikely(talloc_fill.enabled)) { \
++	if (unlikely(talloc_fill_enabled)) { \
+ 		size_t _flen = (_tc)->size - (_new_size); \
+ 		char *_fptr = (char *)TC_PTR_FROM_CHUNK(_tc); \
+ 		_fptr += (_new_size); \
+-		memset(_fptr, talloc_fill.fill_value, _flen); \
++		memset(_fptr, talloc_fill_fill_value, _flen); \
+ 	} \
+ } while (0)
+ 
+@@ -221,41 +224,6 @@ static struct {
+ 	TC_UNDEFINE_GROW_VALGRIND_CHUNK(_tc, _new_size); \
+ } while (0)
+ 
+-struct talloc_reference_handle {
+-	struct talloc_reference_handle *next, *prev;
+-	void *ptr;
+-	const char *location;
+-};
+-
+-typedef int (*talloc_destructor_t)(void *);
+-
+-struct talloc_chunk {
+-	struct talloc_chunk *next, *prev;
+-	struct talloc_chunk *parent, *child;
+-	struct talloc_reference_handle *refs;
+-	talloc_destructor_t destructor;
+-	const char *name;
+-	size_t size;
+-	unsigned flags;
+-
+-	/*
+-	 * "pool" has dual use:
+-	 *
+-	 * For the talloc pool itself (i.e. TALLOC_FLAG_POOL is set), "pool"
+-	 * marks the end of the currently allocated area.
+-	 *
+-	 * For members of the pool (i.e. TALLOC_FLAG_POOLMEM is set), "pool"
+-	 * is a pointer to the struct talloc_chunk of the pool that it was
+-	 * allocated from. This way children can quickly find the pool to chew
+-	 * from.
+-	 */
+-	void *pool;
+-};
+-
+-/* 16 byte alignment seems to keep everyone happy */
+-#define TC_ALIGN16(s) (((s)+15)&~15)
+-#define TC_HDR_SIZE TC_ALIGN16(sizeof(struct talloc_chunk))
+-#define TC_PTR_FROM_CHUNK(tc) ((void *)(TC_HDR_SIZE + (char*)tc))
+ 
+ _PUBLIC_ int talloc_version_major(void)
+ {
+@@ -342,10 +310,12 @@ static void talloc_abort_unknown_value(void)
+ }
+ 
+ /* panic if we get a bad magic value */
++#ifdef SANITY_CHECKS
+ static inline struct talloc_chunk *talloc_chunk_from_ptr(const void *ptr)
+ {
+ 	const char *pp = (const char *)ptr;
+ 	struct talloc_chunk *tc = discard_const_p(struct talloc_chunk, pp - TC_HDR_SIZE);
++
+ 	if (unlikely((tc->flags & (TALLOC_FLAG_FREE | ~0xF)) != TALLOC_MAGIC)) { 
+ 		if ((tc->flags & (~0xFFF)) == TALLOC_MAGIC_BASE) {
+ 			talloc_abort_magic(tc->flags & (~0xF));
+@@ -361,8 +331,10 @@ static inline struct talloc_chunk *talloc_chunk_from_ptr(const void *ptr)
+ 			return NULL;
+ 		}
+ 	}
++
+ 	return tc;
+ }
++#endif
+ 
+ /* hook into the front of the list */
+ #define _TLIST_ADD(list, p) \
+@@ -474,8 +446,8 @@ static void tc_invalidate_pool(union talloc_pool_chunk *pool_tc)
+ {
+ 	size_t flen = tc_pool_space_left(pool_tc);
+ 
+-	if (unlikely(talloc_fill.enabled)) {
+-		memset(pool_tc->hdr.c.pool, talloc_fill.fill_value, flen);
++	if (unlikely(talloc_fill_enabled)) {
++		memset(pool_tc->hdr.c.pool, talloc_fill_fill_value, flen);
+ 	}
+ 
+ #if defined(DEVELOPER) && defined(VALGRIND_MAKE_MEM_NOACCESS)
+@@ -540,7 +512,7 @@ static struct talloc_chunk *talloc_alloc_pool(struct talloc_chunk *parent,
+ /* 
+    Allocate a bit of memory as a child of an existing pointer
+ */
+-static inline void *__talloc(const void *context, size_t size)
++void *__talloc(const void *context, size_t size)
+ {
+ 	struct talloc_chunk *tc = NULL;
+ 
+@@ -657,33 +629,6 @@ static int talloc_reference_destructor(struct talloc_reference_handle *handle)
+ }
+ 
+ /*
+-   more efficient way to add a name to a pointer - the name must point to a 
+-   true string constant
+-*/
+-static inline void _talloc_set_name_const(const void *ptr, const char *name)
+-{
+-	struct talloc_chunk *tc = talloc_chunk_from_ptr(ptr);
+-	tc->name = name;
+-}
+-
+-/*
+-  internal talloc_named_const()
+-*/
+-static inline void *_talloc_named_const(const void *context, size_t size, const char *name)
+-{
+-	void *ptr;
+-
+-	ptr = __talloc(context, size);
+-	if (unlikely(ptr == NULL)) {
+-		return NULL;
+-	}
+-
+-	_talloc_set_name_const(ptr, name);
+-
+-	return ptr;
+-}
+-
+-/*
+   make a secondary reference to a pointer, hanging off the given context.
+   the pointer remains valid until both the original caller and this given
+   context are freed.
+@@ -716,8 +661,12 @@ _PUBLIC_ void *_talloc_reference_loc(const void *context, const void *ptr, const
+ 
+ static void *_talloc_steal_internal(const void *new_ctx, const void *ptr);
+ 
++#ifdef SANITY_CHECKS
+ static inline void _talloc_free_poolmem(struct talloc_chunk *tc,
+ 					const char *location)
++#else
++static inline void _talloc_free_poolmem(struct talloc_chunk *tc)
++#endif
+ {
+ 	union talloc_pool_chunk *pool;
+ 	void *next_tc;
+@@ -727,11 +676,13 @@ static inline void _talloc_free_poolmem(struct talloc_chunk *tc,
+ 
+ 	tc->flags |= TALLOC_FLAG_FREE;
+ 
++#ifdef SANITY_CHECKS
+ 	/* we mark the freed memory with where we called the free
+ 	 * from. This means on a double free error we can report where
+ 	 * the first free came from
+ 	 */
+ 	tc->name = location;
++#endif
+ 
+ 	TC_INVALIDATE_FULL_CHUNK(tc);
+ 
+@@ -754,12 +705,14 @@ static inline void _talloc_free_poolmem(struct talloc_chunk *tc,
+ 		pool->hdr.c.pool = tc_pool_first_chunk(pool);
+ 		tc_invalidate_pool(pool);
+ 	} else if (unlikely(pool->hdr.object_count == 0)) {
++#ifdef SANITY_CHECKS
+ 		/*
+ 		 * we mark the freed memory with where we called the free
+ 		 * from. This means on a double free error we can report where
+ 		 * the first free came from
+ 		 */
+ 		pool->hdr.c.name = location;
++#endif
+ 
+ 		TC_INVALIDATE_FULL_CHUNK(&pool->hdr.c);
+ 		free(pool);
+@@ -773,14 +726,23 @@ static inline void _talloc_free_poolmem(struct talloc_chunk *tc,
+ 	}
+ }
+ 
++#ifdef SANITY_CHECKS
+ static inline void _talloc_free_children_internal(struct talloc_chunk *tc,
+ 						  void *ptr,
+ 						  const char *location);
++#else
++static inline void _talloc_free_children_internal(struct talloc_chunk *tc,
++						  void *ptr);
+ 
++#endif
+ /* 
+    internal talloc_free call
+ */
++#ifdef SANITY_CHECKS
+ static inline int _talloc_free_internal(void *ptr, const char *location)
++#else
++static inline int _talloc_free_internal(void *ptr)
++#endif
+ {
+ 	struct talloc_chunk *tc;
+ 
+@@ -788,16 +750,17 @@ static inline int _talloc_free_internal(void *ptr, const char *location)
+ 		return -1;
+ 	}
+ 
++#ifdef SANITY_CHECKS
+ 	/* possibly initialised the talloc fill value */
+-	if (unlikely(!talloc_fill.initialised)) {
++	if (unlikely(!talloc_fill_initialised)) {
+ 		const char *fill = getenv(TALLOC_FILL_ENV);
+ 		if (fill != NULL) {
+-			talloc_fill.enabled = true;
+-			talloc_fill.fill_value = strtoul(fill, NULL, 0);
++			talloc_fill_enabled = true;
++			talloc_fill_fill_value = strtoul(fill, NULL, 0);
+ 		}
+-		talloc_fill.initialised = true;
++		talloc_fill_initialised = true;
+ 	}
+-
++#endif
+ 	tc = talloc_chunk_from_ptr(ptr);
+ 
+ 	if (unlikely(tc->refs)) {
+@@ -810,10 +773,17 @@ static inline int _talloc_free_internal(void *ptr, const char *location)
+ 		 * pointer.
+ 		 */
+ 		is_child = talloc_is_parent(tc->refs, ptr);
++#ifdef SANITY_CHECKS
+ 		_talloc_free_internal(tc->refs, location);
+ 		if (is_child) {
+ 			return _talloc_free_internal(ptr, location);
+ 		}
++#else
++		_talloc_free_internal(tc->refs);
++				if (is_child) {
++					return _talloc_free_internal(ptr);
++				}
++#endif
+ 		return -1;
+ 	}
+ 
+@@ -848,15 +818,19 @@ static inline int _talloc_free_internal(void *ptr, const char *location)
+ 
+ 	tc->flags |= TALLOC_FLAG_LOOP;
+ 
++#ifdef SANITY_CHECKS
+ 	_talloc_free_children_internal(tc, ptr, location);
+ 
+-	tc->flags |= TALLOC_FLAG_FREE;
+-
+ 	/* we mark the freed memory with where we called the free
+ 	 * from. This means on a double free error we can report where
+ 	 * the first free came from 
+ 	 */	 
+ 	tc->name = location;
++#else
++	_talloc_free_children_internal(tc, ptr);
++#endif
++
++	tc->flags |= TALLOC_FLAG_FREE;
+ 
+ 	if (tc->flags & TALLOC_FLAG_POOL) {
+ 		union talloc_pool_chunk *pool = (union talloc_pool_chunk *)tc;
+@@ -872,7 +846,11 @@ static inline int _talloc_free_internal(void *ptr, const char *location)
+ 			free(tc);
+ 		}
+ 	} else if (tc->flags & TALLOC_FLAG_POOLMEM) {
++#ifdef SANITY_CHECKS
+ 		_talloc_free_poolmem(tc, location);
++#else
++		_talloc_free_poolmem(tc);
++#endif
+ 	} else {
+ 		TC_INVALIDATE_FULL_CHUNK(tc);
+ 		free(tc);
+@@ -1036,7 +1014,11 @@ static inline int talloc_unreference(const void *context, const void *ptr)
+ 		return -1;
+ 	}
+ 
++#ifdef SANITY_CHECKS
+ 	return _talloc_free_internal(h, __location__);
++#else
++	return _talloc_free_internal(h);
++#endif
+ }
+ 
+ /*
+@@ -1072,7 +1054,11 @@ _PUBLIC_ int talloc_unlink(const void *context, void *ptr)
+ 	tc_p = talloc_chunk_from_ptr(ptr);
+ 
+ 	if (tc_p->refs == NULL) {
++#ifdef SANITY_CHECKS
+ 		return _talloc_free_internal(ptr, __location__);
++#else
++		return _talloc_free_internal(ptr);
++#endif
+ 	}
+ 
+ 	new_p = talloc_parent_chunk(tc_p->refs);
+@@ -1139,7 +1125,11 @@ _PUBLIC_ void *talloc_named(const void *context, size_t size, const char *fmt, .
+ 	va_end(ap);
+ 
+ 	if (unlikely(name == NULL)) {
++#ifdef SANITY_CHECKS
+ 		_talloc_free_internal(ptr, __location__);
++#else
++		_talloc_free_internal(ptr);
++#endif
+ 		return NULL;
+ 	}
+ 
+@@ -1195,6 +1185,7 @@ static void talloc_abort_type_mismatch(const char *location,
+ 	talloc_abort(reason);
+ }
+ 
++#ifdef SANITY_CHECKS
+ _PUBLIC_ void *_talloc_get_type_abort(const void *ptr, const char *name, const char *location)
+ {
+ 	const char *pname;
+@@ -1212,7 +1203,7 @@ _PUBLIC_ void *_talloc_get_type_abort(const void *ptr, const char *name, const c
+ 	talloc_abort_type_mismatch(location, pname, name);
+ 	return NULL;
+ }
+-
++#endif
+ /*
+   this is for compatibility with older versions of talloc
+ */
+@@ -1230,16 +1221,25 @@ _PUBLIC_ void *talloc_init(const char *fmt, ...)
+ 	va_end(ap);
+ 
+ 	if (unlikely(name == NULL)) {
++#ifdef SANITY_CHECKS
+ 		_talloc_free_internal(ptr, __location__);
++#else
++		_talloc_free_internal(ptr);
++#endif
+ 		return NULL;
+ 	}
+ 
+ 	return ptr;
+ }
+ 
++#ifdef SANITY_CHECKS
+ static inline void _talloc_free_children_internal(struct talloc_chunk *tc,
+ 						  void *ptr,
+ 						  const char *location)
++#else
++static inline void _talloc_free_children_internal(struct talloc_chunk *tc,
++						  void *ptr)
++#endif
+ {
+ 	while (tc->child) {
+ 		/* we need to work out who will own an abandoned child
+@@ -1253,7 +1253,11 @@ static inline void _talloc_free_children_internal(struct talloc_chunk *tc,
+ 			struct talloc_chunk *p = talloc_parent_chunk(tc->child->refs);
+ 			if (p) new_parent = TC_PTR_FROM_CHUNK(p);
+ 		}
++#ifdef SANITY_CHECKS
+ 		if (unlikely(_talloc_free_internal(child, location) == -1)) {
++#else
++			if (unlikely(_talloc_free_internal(child) == -1)) {
++#endif
+ 			if (new_parent == null_context) {
+ 				struct talloc_chunk *p = talloc_parent_chunk(ptr);
+ 				if (p) new_parent = TC_PTR_FROM_CHUNK(p);
+@@ -1292,7 +1296,11 @@ _PUBLIC_ void talloc_free_children(void *ptr)
+ 		}
+ 	}
+ 
++#ifdef SANITY_CHECKS
+ 	_talloc_free_children_internal(tc, ptr, __location__);
++#else
++	_talloc_free_children_internal(tc, ptr);
++#endif
+ 
+ 	/* .. so we put it back after all other children have been freed */
+ 	if (tc_name) {
+@@ -1305,32 +1313,6 @@ _PUBLIC_ void talloc_free_children(void *ptr)
+ }
+ 
+ /* 
+-   Allocate a bit of memory as a child of an existing pointer
+-*/
+-_PUBLIC_ void *_talloc(const void *context, size_t size)
+-{
+-	return __talloc(context, size);
+-}
+-
+-/*
+-  externally callable talloc_set_name_const()
+-*/
+-_PUBLIC_ void talloc_set_name_const(const void *ptr, const char *name)
+-{
+-	_talloc_set_name_const(ptr, name);
+-}
+-
+-/*
+-  create a named talloc pointer. Any talloc pointer can be named, and
+-  talloc_named() operates just like talloc() except that it allows you
+-  to name the pointer.
+-*/
+-_PUBLIC_ void *talloc_named_const(const void *context, size_t size, const char *name)
+-{
+-	return _talloc_named_const(context, size, name);
+-}
+-
+-/* 
+    free a talloc pointer. This also frees all child pointers of this 
+    pointer recursively
+ 
+@@ -1338,7 +1320,11 @@ _PUBLIC_ void *talloc_named_const(const void *context, size_t size, const char *
+    will not be freed if the ref_count is > 1 or the destructor (if
+    any) returns non-zero
+ */
++#ifdef SANITY_CHECKS
+ _PUBLIC_ int _talloc_free(void *ptr, const char *location)
++#else
++_PUBLIC_ int _talloc_free(void *ptr)
++#endif
+ {
+ 	struct talloc_chunk *tc;
+ 
+@@ -1358,8 +1344,12 @@ _PUBLIC_ int _talloc_free(void *ptr, const char *location)
+ 			return talloc_unlink(null_context, ptr);
+ 		}
+ 
++#ifdef SANITY_CHECKS
+ 		talloc_log("ERROR: talloc_free with references at %s\n",
+ 			   location);
++#else
++		talloc_log("ERROR: talloc_free with references\n");
++#endif
+ 
+ 		for (h=tc->refs; h; h=h->next) {
+ 			talloc_log("\treference at %s\n",
+@@ -1367,8 +1357,11 @@ _PUBLIC_ int _talloc_free(void *ptr, const char *location)
+ 		}
+ 		return -1;
+ 	}
+-	
++#ifdef SANITY_CHECKS
+ 	return _talloc_free_internal(ptr, location);
++#else
++	return _talloc_free_internal(ptr);
++#endif
+ }
+ 
+ 
+@@ -1377,7 +1370,11 @@ _PUBLIC_ int _talloc_free(void *ptr, const char *location)
+   A talloc version of realloc. The context argument is only used if
+   ptr is NULL
+ */
++#ifdef SANITY_CHECKS
+ _PUBLIC_ void *_talloc_realloc(const void *context, void *ptr, size_t size, const char *name)
++#else
++_PUBLIC_ void *_talloc_realloc(const void *context, void *ptr, size_t size)
++#endif
+ {
+ 	struct talloc_chunk *tc;
+ 	void *new_ptr;
+@@ -1396,7 +1393,11 @@ _PUBLIC_ void *_talloc_realloc(const void *context, void *ptr, size_t size, cons
+ 
+ 	/* realloc(NULL) is equivalent to malloc() */
+ 	if (ptr == NULL) {
++#ifdef SANITY_CHECKS
+ 		return _talloc_named_const(context, size, name);
++#else
++		return __talloc(context, size);
++#endif
+ 	}
+ 
+ 	tc = talloc_chunk_from_ptr(ptr);
+@@ -1556,8 +1557,11 @@ _PUBLIC_ void *_talloc_realloc(const void *context, void *ptr, size_t size, cons
+ 
+ 		if (new_ptr) {
+ 			memcpy(new_ptr, tc, MIN(tc->size,size) + TC_HDR_SIZE);
+-
++#ifdef SANITY_CHECKS
+ 			_talloc_free_poolmem(tc, __location__ "_talloc_realloc");
++#else
++			_talloc_free_poolmem(tc);
++#endif
+ 		}
+ 	}
+ 	else {
+@@ -1590,7 +1594,9 @@ got_new_ptr:
+ 	}
+ 
+ 	tc->size = size;
++#ifdef SANITY_CHECKS
+ 	_talloc_set_name_const(TC_PTR_FROM_CHUNK(tc), name);
++#endif
+ 
+ 	return TC_PTR_FROM_CHUNK(tc);
+ }
+@@ -1891,9 +1897,16 @@ _PUBLIC_ void talloc_enable_leak_report_full(void)
+ /* 
+    talloc and zero memory. 
+ */
++#ifdef SANITY_CHECKS
+ _PUBLIC_ void *_talloc_zero(const void *ctx, size_t size, const char *name)
+ {
+ 	void *p = _talloc_named_const(ctx, size, name);
++#else
++_PUBLIC_ void *_talloc_zero(const void *ctx, size_t size)
++{
++	void *p = __talloc(ctx, size);
++
++#endif
+ 
+ 	if (p) {
+ 		memset(p, '\0', size);
+@@ -1905,9 +1918,16 @@ _PUBLIC_ void *_talloc_zero(const void *ctx, size_t size, const char *name)
+ /*
+   memdup with a talloc. 
+ */
++#ifdef SANITY_CHECKS
+ _PUBLIC_ void *_talloc_memdup(const void *t, const void *p, size_t size, const char *name)
+ {
+ 	void *newp = _talloc_named_const(t, size, name);
++#else
++_PUBLIC_ void *_talloc_memdup(const void *t, const void *p, size_t size)
++	{
++		void *newp = __talloc(t, size);
++
++#endif
+ 
+ 	if (likely(newp)) {
+ 		memcpy(newp, p, size);
+@@ -2210,23 +2230,39 @@ _PUBLIC_ void *_talloc_array(const void *ctx, size_t el_size, unsigned count, co
+ /*
+   alloc an zero array, checking for integer overflow in the array size
+ */
++#ifdef SANITY_CHECKS
+ _PUBLIC_ void *_talloc_zero_array(const void *ctx, size_t el_size, unsigned count, const char *name)
++#else
++_PUBLIC_ void *_talloc_zero_array(const void *ctx, size_t el_size, unsigned count)
++#endif
+ {
+ 	if (count >= MAX_TALLOC_SIZE/el_size) {
+ 		return NULL;
+ 	}
++#ifdef SANITY_CHECKS
+ 	return _talloc_zero(ctx, el_size * count, name);
++#else
++	return _talloc_zero(ctx, el_size * count);
++#endif
+ }
+ 
+ /*
+   realloc an array, checking for integer overflow in the array size
+ */
++#ifdef SANITY_CHECKS
+ _PUBLIC_ void *_talloc_realloc_array(const void *ctx, void *ptr, size_t el_size, unsigned count, const char *name)
++#else
++_PUBLIC_ void *_talloc_realloc_array(const void *ctx, void *ptr, size_t el_size, unsigned count)
++#endif
+ {
+ 	if (count >= MAX_TALLOC_SIZE/el_size) {
+ 		return NULL;
+ 	}
++#ifdef SANITY_CHECKS
+ 	return _talloc_realloc(ctx, ptr, el_size * count, name);
++#else
++	return _talloc_realloc(ctx, ptr, el_size * count);
++#endif
+ }
+ 
+ /*
+@@ -2236,7 +2272,11 @@ _PUBLIC_ void *_talloc_realloc_array(const void *ctx, void *ptr, size_t el_size,
+ */
+ _PUBLIC_ void *talloc_realloc_fn(const void *context, void *ptr, size_t size)
+ {
++#ifdef SANITY_CHECKS
+ 	return _talloc_realloc(context, ptr, size, NULL);
++#else
++	return _talloc_realloc(context, ptr, size);
++#endif
+ }
+ 
+ 
+diff --git a/lib/talloc/talloc.h b/lib/talloc/talloc.h
+index e48dc09..eae78b3 100644
+--- a/lib/talloc/talloc.h
++++ b/lib/talloc/talloc.h
+@@ -29,6 +29,7 @@
+ #include <stdio.h>
+ #include <stdarg.h>
+ 
++//#define SANITY_CHECKS 1
+ #ifdef __cplusplus
+ extern "C" {
+ #endif
+@@ -99,6 +100,54 @@ typedef void TALLOC_CTX;
+ #endif
+ #endif
+ 
++struct talloc_reference_handle {
++	struct talloc_reference_handle *next, *prev;
++	void *ptr;
++	const char *location;
++};
++
++typedef int (*talloc_destructor_t)(void *);
++
++struct talloc_chunk {
++	struct talloc_chunk *next, *prev;
++	struct talloc_chunk *parent, *child;
++	struct talloc_reference_handle *refs;
++	talloc_destructor_t destructor;
++	const char *name;
++	size_t size;
++	unsigned flags;
++
++	/*
++	 * "pool" has dual use:
++	 *
++	 * For the talloc pool itself (i.e. TALLOC_FLAG_POOL is set), "pool"
++	 * marks the end of the currently allocated area.
++	 *
++	 * For members of the pool (i.e. TALLOC_FLAG_POOLMEM is set), "pool"
++	 * is a pointer to the struct talloc_chunk of the pool that it was
++	 * allocated from. This way children can quickly find the pool to chew
++	 * from.
++	 */
++	void *pool;
++};
++
++/* 16 byte alignment seems to keep everyone happy */
++#define TC_ALIGN16(s) (((s)+15)&~15)
++#define TC_HDR_SIZE TC_ALIGN16(sizeof(struct talloc_chunk))
++#define TC_PTR_FROM_CHUNK(tc) ((void *)(TC_HDR_SIZE + (char*)tc))
++
++#ifdef SANITY_CHECKS
++static inline struct talloc_chunk *talloc_chunk_from_ptr(const void *ptr);
++#else
++static inline struct talloc_chunk *talloc_chunk_from_ptr(const void *ptr)
++{
++	const char *pp = (const char *)ptr;
++	struct talloc_chunk *tc = discard_const_p(struct talloc_chunk, pp - TC_HDR_SIZE);
++
++	return tc;
++}
++#endif
++
+ #ifdef DOXYGEN
+ /**
+  * @brief Create a new talloc context.
+@@ -135,8 +184,18 @@ typedef void TALLOC_CTX;
+  */
+ void *talloc(const void *ctx, #type);
+ #else
++#ifdef SANITY_CHECKS
+ #define talloc(ctx, type) (type *)talloc_named_const(ctx, sizeof(type), #type)
+-void *_talloc(const void *context, size_t size);
++#else
++#define talloc(ctx, type) (type *)_talloc(ctx, sizeof(type))
++#endif
++void *__talloc(const void *context, size_t size);
++
++static inline void *_talloc(const void *context, size_t size)
++{
++	return __talloc(context, size);
++}
++
+ #endif
+ 
+ /**
+@@ -223,8 +282,13 @@ void *talloc_init(const char *fmt, ...) PRINTF_ATTRIBUTE(1,2);
+  */
+ int talloc_free(void *ptr);
+ #else
++#ifdef SANITY_CHECKS
+ #define talloc_free(ctx) _talloc_free(ctx, __location__)
+ int _talloc_free(void *ptr, const char *location);
++#else
++#define talloc_free(ctx) _talloc_free(ctx)
++int _talloc_free(void *ptr);
++#endif
+ #endif
+ 
+ /**
+@@ -432,7 +496,20 @@ void *_talloc_move(const void *new_ctx, const void *pptr);
+  *
+  * @param[in]  name     Format string for the name.
+  */
+-void talloc_set_name_const(const void *ptr, const char *name);
++/*
++   more efficient way to add a name to a pointer - the name must point to a 
++   true string constant
++*/
++static inline void _talloc_set_name_const(const void *ptr, const char *name)
++{
++	struct talloc_chunk *tc = talloc_chunk_from_ptr(ptr);
++	tc->name = name;
++}
++
++static inline void talloc_set_name_const(const void *ptr, const char *name)
++{
++	_talloc_set_name_const(ptr, name);
++}
+ 
+ /**
+  * @brief Create a named talloc chunk.
+@@ -478,7 +555,32 @@ void *talloc_named(const void *context, size_t size,
+  *
+  * @return             The allocated memory chunk, NULL on error.
+  */
+-void *talloc_named_const(const void *context, size_t size, const char *name);
++__attribute__((always_inline))
++static __inline void *_talloc_named_const(const void *context, size_t size, const char *name)
++{
++	void *ptr;
++
++	ptr = _talloc(context, size);
++#ifdef SANITY_CHECKS
++	if (unlikely(ptr == NULL)) {
++		return NULL;
++	}
++
++	_talloc_set_name_const(ptr, name);
++#endif
++	return ptr;
++}
++
++/*
++  create a named talloc pointer. Any talloc pointer can be named, and
++  talloc_named() operates just like talloc() except that it allows you
++  to name the pointer.
++*/
++__attribute__((always_inline))
++static __inline void *talloc_named_const(const void *context, size_t size, const char *name)
++{
++	return _talloc_named_const(context, size, name);
++}
+ 
+ #ifdef DOXYGEN
+ /**
+@@ -503,7 +605,11 @@ void *talloc_named_const(const void *context, size_t size, const char *name);
+  */
+ void *talloc_size(const void *ctx, size_t size);
+ #else
++#ifdef SANITY_CHECKS
+ #define talloc_size(ctx, size) talloc_named_const(ctx, size, __location__)
++#else
++#define talloc_size(ctx, size) __talloc(ctx, size)
++#endif
+ #endif
+ 
+ #ifdef DOXYGEN
+@@ -548,7 +654,11 @@ void *talloc_ptrtype(const void *ctx, #type);
+  */
+ void *talloc_new(const void *ctx);
+ #else
++#ifdef SANITY_CHECKS
+ #define talloc_new(ctx) talloc_named_const(ctx, 0, "talloc_new: " __location__)
++#else
++#define talloc_new(ctx) __talloc(ctx, 0)
++#endif
+ #endif
+ 
+ #ifdef DOXYGEN
+@@ -593,9 +703,15 @@ void *talloc_zero(const void *ctx, #type);
+  */
+ void *talloc_zero_size(const void *ctx, size_t size);
+ #else
++#ifdef SANITY_CHECKS
+ #define talloc_zero(ctx, type) (type *)_talloc_zero(ctx, sizeof(type), #type)
+ #define talloc_zero_size(ctx, size) _talloc_zero(ctx, size, __location__)
+ void *_talloc_zero(const void *ctx, size_t size, const char *name);
++#else
++#define talloc_zero(ctx, type) (type *)_talloc_zero(ctx, sizeof(type))
++#define talloc_zero_size(ctx, size) _talloc_zero(ctx, size)
++void *_talloc_zero(const void *ctx, size_t size);
++#endif
+ #endif
+ 
+ /**
+@@ -697,8 +813,13 @@ size_t talloc_total_blocks(const void *ptr);
+  */
+ void *talloc_memdup(const void *t, const void *p, size_t size);
+ #else
++#ifdef SANITY_CHECKS
+ #define talloc_memdup(t, p, size) _talloc_memdup(t, p, size, __location__)
+ void *_talloc_memdup(const void *t, const void *p, size_t size, const char *name);
++#else
++#define talloc_memdup(t, p, size) _talloc_memdup(t, p, size)
++void *_talloc_memdup(const void *t, const void *p, size_t size);
++#endif
+ #endif
+ 
+ #ifdef DOXYGEN
+@@ -741,7 +862,7 @@ void talloc_set_type(const char *ptr, #type);
+ type *talloc_get_type(const void *ptr, #type);
+ #else
+ #define talloc_set_type(ptr, type) talloc_set_name_const(ptr, #type)
+-#define talloc_get_type(ptr, type) (type *)talloc_check_name(ptr, #type)
++#define talloc_get_type(ptr, type) (type *)talloc_get_type_abort(ptr, type)
+ #endif
+ 
+ #ifdef DOXYGEN
+@@ -762,7 +883,16 @@ type *talloc_get_type(const void *ptr, #type);
+ void *talloc_get_type_abort(const void *ptr, #type);
+ #else
+ #define talloc_get_type_abort(ptr, type) (type *)_talloc_get_type_abort(ptr, #type, __location__)
++
++#ifdef SANITY_CHECKS
+ void *_talloc_get_type_abort(const void *ptr, const char *name, const char *location);
++#else
++static inline void *_talloc_get_type_abort(const void *ptr, const char *name, const char *location)
++{
++	return discard_const_p(void, ptr);
++}
++#endif
++
+ #endif
+ 
+ /**
+@@ -1180,11 +1310,18 @@ size_t talloc_array_length(const void *ctx);
+  */
+ void *talloc_zero_array(const void *ctx, #type, unsigned count);
+ #else
++#ifdef SANITY_CHECKS
+ #define talloc_zero_array(ctx, type, count) (type *)_talloc_zero_array(ctx, sizeof(type), count, #type)
+ void *_talloc_zero_array(const void *ctx,
+ 			 size_t el_size,
+ 			 unsigned count,
+ 			 const char *name);
++#else
++#define talloc_zero_array(ctx, type, count) (type *)_talloc_zero_array(ctx, sizeof(type), count)
++void *_talloc_zero_array(const void *ctx,
++			 size_t el_size,
++			 unsigned count);
++#endif
+ #endif
+ 
+ #ifdef DOXYGEN
+@@ -1220,8 +1357,13 @@ void *_talloc_zero_array(const void *ctx,
+  */
+ void *talloc_realloc(const void *ctx, void *ptr, #type, size_t count);
+ #else
++#ifdef SANITY_CHECKS
+ #define talloc_realloc(ctx, p, type, count) (type *)_talloc_realloc_array(ctx, p, sizeof(type), count, #type)
+ void *_talloc_realloc_array(const void *ctx, void *ptr, size_t el_size, unsigned count, const char *name);
++#else
++#define talloc_realloc(ctx, p, type, count) (type *)_talloc_realloc_array(ctx, p, sizeof(type), count)
++void *_talloc_realloc_array(const void *ctx, void *ptr, size_t el_size, unsigned count);
++#endif
+ #endif
+ 
+ #ifdef DOXYGEN
+@@ -1241,8 +1383,13 @@ void *_talloc_realloc_array(const void *ctx, void *ptr, size_t el_size, unsigned
+  */
+ void *talloc_realloc_size(const void *ctx, void *ptr, size_t size);
+ #else
++#ifdef SANITY_CHECKS
+ #define talloc_realloc_size(ctx, ptr, size) _talloc_realloc(ctx, ptr, size, __location__)
+ void *_talloc_realloc(const void *context, void *ptr, size_t size, const char *name);
++#else
++#define talloc_realloc_size(ctx, ptr, size) _talloc_realloc(ctx, ptr, size)
++void *_talloc_realloc(const void *context, void *ptr, size_t size);
++#endif
+ #endif
+ 
+ /**
+diff --git a/lib/tevent/tevent.c b/lib/tevent/tevent.c
+index fa842e4..164d746 100644
+--- a/lib/tevent/tevent.c
++++ b/lib/tevent/tevent.c
+@@ -381,9 +381,15 @@ struct tevent_timer *_tevent_add_timer(struct tevent_context *ev,
+   allocate an immediate event
+   return NULL on failure (memory allocation error)
+ */
++#ifdef SANITY_CHECKS
+ struct tevent_immediate *_tevent_create_immediate(TALLOC_CTX *mem_ctx,
+ 						  const char *location)
+ {
++#else
++struct tevent_immediate *_tevent_create_immediate(TALLOC_CTX *mem_ctx)
++{
++	const char *location = NULL;
++#endif
+ 	struct tevent_immediate *im;
+ 
+ 	im = talloc(mem_ctx, struct tevent_immediate);
+@@ -404,20 +410,6 @@ struct tevent_immediate *_tevent_create_immediate(TALLOC_CTX *mem_ctx,
+ }
+ 
+ /*
+-  schedule an immediate event
+-*/
+-void _tevent_schedule_immediate(struct tevent_immediate *im,
+-				struct tevent_context *ev,
+-				tevent_immediate_handler_t handler,
+-				void *private_data,
+-				const char *handler_name,
+-				const char *location)
+-{
+-	ev->ops->schedule_immediate(im, ev, handler, private_data,
+-				    handler_name, location);
+-}
+-
+-/*
+   add a signal event
+ 
+   sa_flags are flags to sigaction(2)
+diff --git a/lib/tevent/tevent.h b/lib/tevent/tevent.h
+index dc61912..bbb056e 100644
+--- a/lib/tevent/tevent.h
++++ b/lib/tevent/tevent.h
+@@ -261,10 +261,16 @@ struct tevent_timer *_tevent_add_timer(struct tevent_context *ev,
+  */
+ struct tevent_immediate *tevent_create_immediate(TALLOC_CTX *mem_ctx);
+ #else
++#ifdef SANITY_CHECKS
+ struct tevent_immediate *_tevent_create_immediate(TALLOC_CTX *mem_ctx,
+ 						  const char *location);
+ #define tevent_create_immediate(mem_ctx) \
+ 	_tevent_create_immediate(mem_ctx, __location__)
++#else
++struct tevent_immediate *_tevent_create_immediate(TALLOC_CTX *mem_ctx);
++#define tevent_create_immediate(mem_ctx) \
++	_tevent_create_immediate(mem_ctx)
++#endif
+ #endif
+ 
+ #ifdef DOXYGEN
+@@ -284,12 +290,7 @@ void tevent_schedule_immediate(struct tevent_immediate *im,
+                 tevent_immediate_handler_t handler,
+                 void *private_data);
+ #else
+-void _tevent_schedule_immediate(struct tevent_immediate *im,
+-				struct tevent_context *ctx,
+-				tevent_immediate_handler_t handler,
+-				void *private_data,
+-				const char *handler_name,
+-				const char *location);
++
+ #define tevent_schedule_immediate(im, ctx, handler, private_data) \
+ 	_tevent_schedule_immediate(im, ctx, handler, private_data, \
+ 				   #handler, __location__);
+@@ -710,7 +711,6 @@ typedef void (*tevent_req_fn)(struct tevent_req *req);
+  * @param[in]  pvt      A pointer to private data to pass to the async request
+  *                      callback.
+  */
+-void tevent_req_set_callback(struct tevent_req *req, tevent_req_fn fn, void *pvt);
+ 
+ #ifdef DOXYGEN
+ /**
+@@ -733,7 +733,7 @@ void tevent_req_set_callback(struct tevent_req *req, tevent_req_fn fn, void *pvt
+  */
+ void *tevent_req_callback_data(struct tevent_req *req, #type);
+ #else
+-void *_tevent_req_callback_data(struct tevent_req *req);
++
+ #define tevent_req_callback_data(_req, _type) \
+ 	talloc_get_type_abort(_tevent_req_callback_data(_req), _type)
+ #endif
+@@ -770,7 +770,7 @@ void *tevent_req_callback_data_void(struct tevent_req *req);
+  */
+ void *tevent_req_data(struct tevent_req *req, #type);
+ #else
+-void *_tevent_req_data(struct tevent_req *req);
++
+ #define tevent_req_data(_req, _type) \
+ 	talloc_get_type_abort(_tevent_req_data(_req), _type)
+ #endif
+@@ -965,6 +965,7 @@ void _tevent_req_notify_callback(struct tevent_req *req, const char *location);
+ 	_tevent_req_notify_callback(req, __location__)
+ #endif
+ 
++
+ #ifdef DOXYGEN
+ /**
+  * @brief An async request has successfully finished.
+@@ -977,8 +978,7 @@ void _tevent_req_notify_callback(struct tevent_req *req, const char *location);
+  */
+ void tevent_req_done(struct tevent_req *req);
+ #else
+-void _tevent_req_done(struct tevent_req *req,
+-		      const char *location);
++
+ #define tevent_req_done(req) \
+ 	_tevent_req_done(req, __location__)
+ #endif
+@@ -1017,9 +1017,6 @@ void _tevent_req_done(struct tevent_req *req,
+ bool tevent_req_error(struct tevent_req *req,
+ 		      uint64_t error);
+ #else
+-bool _tevent_req_error(struct tevent_req *req,
+-		       uint64_t error,
+-		       const char *location);
+ #define tevent_req_error(req, error) \
+ 	_tevent_req_error(req, error, __location__)
+ #endif
+@@ -1045,9 +1042,6 @@ bool _tevent_req_error(struct tevent_req *req,
+ bool tevent_req_nomem(const void *p,
+ 		      struct tevent_req *req);
+ #else
+-bool _tevent_req_nomem(const void *p,
+-		       struct tevent_req *req,
+-		       const char *location);
+ #define tevent_req_nomem(p, req) \
+ 	_tevent_req_nomem(p, req, __location__)
+ #endif
+@@ -1060,8 +1054,6 @@ bool _tevent_req_nomem(const void *p,
+  */
+ void tevent_req_oom(struct tevent_req *req);
+ #else
+-void _tevent_req_oom(struct tevent_req *req,
+-		     const char *location);
+ #define tevent_req_oom(req) \
+ 	_tevent_req_oom(req, __location__)
+ #endif
+@@ -1101,8 +1093,6 @@ void _tevent_req_oom(struct tevent_req *req,
+  *
+  * @return              The given request will be returned.
+  */
+-struct tevent_req *tevent_req_post(struct tevent_req *req,
+-				   struct tevent_context *ev);
+ 
+ /**
+  * @brief Finish multiple requests within one function
+@@ -1155,7 +1145,6 @@ void tevent_req_defer_callback(struct tevent_req *req,
+  *
+  * @return              The boolean form of "is in progress".
+  */
+-bool tevent_req_is_in_progress(struct tevent_req *req);
+ 
+ /**
+  * @brief Actively poll for the given request to finish.
+@@ -1760,6 +1749,132 @@ bool tevent_register_backend(const char *name, const struct tevent_ops *ops);
+ 
+ #endif /* TEVENT_COMPAT_DEFINES */
+ 
++#include <tevent_internal.h>
++
++static inline void _tevent_schedule_immediate(struct tevent_immediate *im,
++				struct tevent_context *ev,
++				tevent_immediate_handler_t handler,
++				void *private_data,
++				const char *handler_name,
++				const char *location)
++{
++	ev->ops->schedule_immediate(im, ev, handler, private_data,
++				    handler_name, location);
++}
++
++static inline void tevent_req_set_callback(struct tevent_req *req, tevent_req_fn fn, void *pvt)
++{
++	req->async.fn = fn;
++	req->async.private_data = pvt;
++}
++
++static inline void *_tevent_req_callback_data(struct tevent_req *req)
++{
++	return req->async.private_data;
++}
++
++static inline void *_tevent_req_data(struct tevent_req *req)
++{
++	return req->data;
++}
++
++__attribute__((always_inline))
++static __inline void tevent_req_finish(struct tevent_req *req,
++			      enum tevent_req_state state,
++			      const char *location)
++{
++	req->internal.state = state;
++	_tevent_req_notify_callback(req, location);
++}
++
++static inline void _tevent_req_done(struct tevent_req *req,
++		      const char *location)
++{
++	tevent_req_finish(req, TEVENT_REQ_DONE, location);
++}
++
++struct comcerto_req_state {
++	enum tevent_req_state state;	/* To keep track of the subrequest state */
++	uint64_t error;			/* To keep track of the subrequest error */
++};
++
++static inline void comcerto_req_done(struct comcerto_req_state *state)
++{
++	state->state = TEVENT_REQ_DONE;
++}
++
++static inline bool _tevent_req_error(struct tevent_req *req,
++		       uint64_t error,
++		       const char *location)
++{
++	if (error == 0) {
++		return false;
++	}
++
++	req->internal.error = error;
++	tevent_req_finish(req, TEVENT_REQ_USER_ERROR, location);
++	return true;
++}
++
++
++static inline bool comcerto_req_error(struct comcerto_req_state *state,
++		       uint64_t error)
++{
++	if (error == 0) {
++		return false;
++	}
++
++	state->state = TEVENT_REQ_USER_ERROR;
++	state->error = error;
++
++	return true;
++}
++
++static inline void _tevent_req_oom(struct tevent_req *req, const char *location)
++{
++	tevent_req_finish(req, TEVENT_REQ_NO_MEMORY, location);
++}
++
++static inline bool _tevent_req_nomem(const void *p,
++		       struct tevent_req *req,
++		       const char *location)
++{
++	if (p != NULL) {
++		return false;
++	}
++	_tevent_req_oom(req, location);
++	return true;
++}
++
++__attribute__((always_inline))
++static __inline void tevent_req_trigger(struct tevent_context *ev,
++			       struct tevent_immediate *im,
++			       void *private_data)
++{
++	struct tevent_req *req = talloc_get_type(private_data,
++				 struct tevent_req);
++
++	tevent_req_finish(req, req->internal.state,
++			  req->internal.finish_location);
++}
++
++static inline struct tevent_req *tevent_req_post(struct tevent_req *req,
++				   struct tevent_context *ev)
++{
++	tevent_schedule_immediate(req->internal.trigger,
++				  ev, tevent_req_trigger, req);
++	return req;
++}
++
++static inline bool tevent_req_is_in_progress(struct tevent_req *req)
++{
++	if (req->internal.state == TEVENT_REQ_IN_PROGRESS) {
++		return true;
++	}
++
++	return false;
++}
++
+ /* @} */
+ 
+ #endif /* __TEVENT_H__ */
+diff --git a/lib/tevent/tevent_internal.h b/lib/tevent/tevent_internal.h
+index f09cf57..c79ad89 100644
+--- a/lib/tevent/tevent_internal.h
++++ b/lib/tevent/tevent_internal.h
+@@ -27,6 +27,9 @@
+    License along with this library; if not, see <http://www.gnu.org/licenses/>.
+ */
+ 
++#ifndef __TEVENT_INTERNAL_H__
++#define __TEVENT_INTERNAL_H__
++
+ struct tevent_req {
+ 	/**
+ 	 * @brief What to do on completion
+@@ -322,3 +325,5 @@ bool tevent_epoll_init(void);
+ 
+ void tevent_trace_point_callback(struct tevent_context *ev,
+ 				 enum tevent_trace_point);
++
++#endif
+diff --git a/lib/tevent/tevent_req.c b/lib/tevent/tevent_req.c
+index d8d0c5f..741890e 100644
+--- a/lib/tevent/tevent_req.c
++++ b/lib/tevent/tevent_req.c
+@@ -102,94 +102,12 @@ void _tevent_req_notify_callback(struct tevent_req *req, const char *location)
+ 	}
+ }
+ 
+-static void tevent_req_finish(struct tevent_req *req,
+-			      enum tevent_req_state state,
+-			      const char *location)
+-{
+-	req->internal.state = state;
+-	_tevent_req_notify_callback(req, location);
+-}
+-
+-void _tevent_req_done(struct tevent_req *req,
+-		      const char *location)
+-{
+-	tevent_req_finish(req, TEVENT_REQ_DONE, location);
+-}
+-
+-bool _tevent_req_error(struct tevent_req *req,
+-		       uint64_t error,
+-		       const char *location)
+-{
+-	if (error == 0) {
+-		return false;
+-	}
+-
+-	req->internal.error = error;
+-	tevent_req_finish(req, TEVENT_REQ_USER_ERROR, location);
+-	return true;
+-}
+-
+-void _tevent_req_oom(struct tevent_req *req, const char *location)
+-{
+-	tevent_req_finish(req, TEVENT_REQ_NO_MEMORY, location);
+-}
+-
+-bool _tevent_req_nomem(const void *p,
+-		       struct tevent_req *req,
+-		       const char *location)
+-{
+-	if (p != NULL) {
+-		return false;
+-	}
+-	_tevent_req_oom(req, location);
+-	return true;
+-}
+-
+-/**
+- * @internal
+- *
+- * @brief Immediate event callback.
+- *
+- * @param[in]  ev       The event context to use.
+- *
+- * @param[in]  im       The immediate event.
+- *
+- * @param[in]  priv     The async request to be finished.
+- */
+-static void tevent_req_trigger(struct tevent_context *ev,
+-			       struct tevent_immediate *im,
+-			       void *private_data)
+-{
+-	struct tevent_req *req = talloc_get_type(private_data,
+-				 struct tevent_req);
+-
+-	tevent_req_finish(req, req->internal.state,
+-			  req->internal.finish_location);
+-}
+-
+-struct tevent_req *tevent_req_post(struct tevent_req *req,
+-				   struct tevent_context *ev)
+-{
+-	tevent_schedule_immediate(req->internal.trigger,
+-				  ev, tevent_req_trigger, req);
+-	return req;
+-}
+-
+ void tevent_req_defer_callback(struct tevent_req *req,
+ 			       struct tevent_context *ev)
+ {
+ 	req->internal.defer_callback_ev = ev;
+ }
+ 
+-bool tevent_req_is_in_progress(struct tevent_req *req)
+-{
+-	if (req->internal.state == TEVENT_REQ_IN_PROGRESS) {
+-		return true;
+-	}
+-
+-	return false;
+-}
+-
+ void tevent_req_received(struct tevent_req *req)
+ {
+ 	TALLOC_FREE(req->data);
+@@ -258,22 +176,6 @@ bool tevent_req_set_endtime(struct tevent_req *req,
+ 	return true;
+ }
+ 
+-void tevent_req_set_callback(struct tevent_req *req, tevent_req_fn fn, void *pvt)
+-{
+-	req->async.fn = fn;
+-	req->async.private_data = pvt;
+-}
+-
+-void *_tevent_req_callback_data(struct tevent_req *req)
+-{
+-	return req->async.private_data;
+-}
+-
+-void *_tevent_req_data(struct tevent_req *req)
+-{
+-	return req->data;
+-}
+-
+ void tevent_req_set_print_fn(struct tevent_req *req, tevent_req_print_fn fn)
+ {
+ 	req->private_print = fn;
+diff --git a/lib/tsocket/tsocket.c b/lib/tsocket/tsocket.c
+index 674858d..24e879a 100644
+--- a/lib/tsocket/tsocket.c
++++ b/lib/tsocket/tsocket.c
+@@ -431,15 +431,6 @@ int tdgram_disconnect_recv(struct tevent_req *req,
+ 	return ret;
+ }
+ 
+-struct tstream_context {
+-	const char *location;
+-	const struct tstream_context_ops *ops;
+-	void *private_data;
+-
+-	struct tevent_req *readv_req;
+-	struct tevent_req *writev_req;
+-};
+-
+ static int tstream_context_destructor(struct tstream_context *stream)
+ {
+ 	if (stream->readv_req) {
+@@ -488,11 +479,6 @@ struct tstream_context *_tstream_context_create(TALLOC_CTX *mem_ctx,
+ 	return stream;
+ }
+ 
+-void *_tstream_context_data(struct tstream_context *stream)
+-{
+-	return stream->private_data;
+-}
+-
+ ssize_t tstream_pending_bytes(struct tstream_context *stream)
+ {
+ 	return stream->ops->pending_bytes(stream);
+@@ -810,3 +796,60 @@ int tstream_disconnect_recv(struct tevent_req *req,
+ 	return ret;
+ }
+ 
++#ifdef CONFIG_COMCERTO_WRITEV
++
++void comcerto_tstream_writev_send(struct comcerto_tstream_writev_req *req,
++				       struct tstream_context *stream,
++				       struct iovec *vector,
++				       size_t count)
++{
++	int to_write = 0;
++	size_t i;
++
++	/* first check if the input is ok */
++#ifdef IOV_MAX
++	if (count > IOV_MAX) {
++		comcerto_req_error(&req->state, EMSGSIZE);
++		goto out;
++	}
++#endif
++
++	for (i=0; i < count; i++) {
++		int tmp = to_write;
++		tmp += vector[i].iov_len;
++
++		if (tmp < to_write) {
++			comcerto_req_error(&req->state, EMSGSIZE);
++			goto out;
++		}
++
++		to_write = tmp;
++	}
++
++	if (to_write == 0) {
++		comcerto_req_error(&req->state, EINVAL);
++		goto out;
++	}
++
++	stream->ops->comcerto_writev_send(req, stream, vector, count);
++
++out:
++	return;
++}
++
++int comcerto_tstream_writev_recv(struct comcerto_tstream_writev_req *req,
++		       int *perrno)
++{
++	int ret;
++
++	if (req->state.state == TEVENT_REQ_USER_ERROR) {
++		*perrno = req->state.error;
++		ret = -1;
++	}
++	else
++		ret = req->ret;
++
++	return ret;
++}
++
++#endif /* CONFIG_COMCERTO_WRITEV */
+diff --git a/lib/tsocket/tsocket.h b/lib/tsocket/tsocket.h
+index 98f864e..c4c2786 100644
+--- a/lib/tsocket/tsocket.h
++++ b/lib/tsocket/tsocket.h
+@@ -1153,5 +1153,70 @@ int tstream_writev_queue_recv(struct tevent_req *req, int *perrno);
+  * @}
+  */
+ 
++#ifdef CONFIG_COMCERTO_READV
++
++typedef int (*comcerto_tstream_readv_pdu_next_vector_t)(struct tstream_context *stream,
++					      void *private_data,
++					      TALLOC_CTX *mem_ctx,
++					      struct iovec *vector,
++					      size_t *count);
++
++struct comcerto_tstream_readv_pdu_state {
++	/* this structs are owned by the caller */
++	struct {
++		struct tevent_context *ev;
++		struct tstream_context *stream;
++		comcerto_tstream_readv_pdu_next_vector_t next_vector_fn;
++		void *next_vector_private;
++	} caller;
++
++	struct iovec vector;
++
++	/*
++	 * the total number of bytes we read,
++	 * the return value of the _recv function
++	 */
++	int total_read;
++};
++
++struct comcerto_tstream_bsd_readv_state {
++	int ret;
++};
++
++struct comcerto_tstream_readv_req {
++	struct comcerto_tstream_readv_pdu_state readv_pdu_state;
++	struct comcerto_tstream_bsd_readv_state bsd_readv_state;
++	struct comcerto_req_state state;
++	bool sync;
++};
++
++void comcerto_tstream_readv_pdu_send(struct comcerto_tstream_readv_req *req,
++				     struct tevent_context *ev,
++				     struct tstream_context *stream,
++				     comcerto_tstream_readv_pdu_next_vector_t next_vector_fn,
++				     void *next_vector_private);
++
++int comcerto_tstream_readv_pdu_recv(struct comcerto_tstream_readv_req *req, int *perrno);
++
++#endif /* CONFIG_COMCERTO_READV */
++
++#ifdef CONFIG_COMCERTO_WRITEV
++
++struct comcerto_tstream_writev_req {
++	void *smb2_req;
++	int ret;
++	struct comcerto_req_state state;
++};
++
++void comcerto_tstream_writev_send(struct comcerto_tstream_writev_req *req,
++				       struct tstream_context *stream,
++				       struct iovec *vector,
++				       size_t count);
++
++int comcerto_tstream_writev_recv(struct comcerto_tstream_writev_req *req,
++		       int *perrno);
++
++#endif /* CONFIG_COMCERTO_WRITEV */
++
+ #endif /* _TSOCKET_H */
+ 
+diff --git a/lib/tsocket/tsocket_bsd.c b/lib/tsocket/tsocket_bsd.c
+index 56dff68..90cb343 100644
+--- a/lib/tsocket/tsocket_bsd.c
++++ b/lib/tsocket/tsocket_bsd.c
+@@ -1431,19 +1431,6 @@ int _tdgram_unix_socket(const struct tsocket_address *local,
+ 	return ret;
+ }
+ 
+-struct tstream_bsd {
+-	int fd;
+-
+-	void *event_ptr;
+-	struct tevent_fd *fde;
+-	bool optimize_readv;
+-
+-	void *readable_private;
+-	void (*readable_handler)(void *private_data);
+-	void *writeable_private;
+-	void (*writeable_handler)(void *private_data);
+-};
+-
+ bool tstream_bsd_optimize_readv(struct tstream_context *stream,
+ 				bool on)
+ {
+@@ -1489,7 +1476,7 @@ static void tstream_bsd_fde_handler(struct tevent_context *ev,
+ 	}
+ }
+ 
+-static int tstream_bsd_set_readable_handler(struct tstream_bsd *bsds,
++int tstream_bsd_set_readable_handler(struct tstream_bsd *bsds,
+ 					    struct tevent_context *ev,
+ 					    void (*handler)(void *private_data),
+ 					    void *private_data)
+@@ -1995,6 +1982,203 @@ static int tstream_bsd_disconnect_recv(struct tevent_req *req,
+ 	return ret;
+ }
+ 
++
++#ifdef CONFIG_COMCERTO_READV
++
++static inline void comcerto_tstream_bsd_readv_handler(struct comcerto_tstream_readv_req *req,
++					struct tstream_context *stream, struct iovec *vector, bool wait)
++{
++	struct comcerto_tstream_bsd_readv_state *state = &req->bsd_readv_state;
++	struct tstream_bsd *bsds = tstream_context_data(stream, struct tstream_bsd);
++	int ret;
++	int err;
++	bool retry;
++	fd_set set;
++
++	while (vector->iov_len) {
++
++		ret = readv(bsds->fd, vector, 1);
++		if (ret <= 0) {
++			if (ret == 0) {
++				/* propagate end of file */
++				comcerto_req_error(&req->state, EPIPE);
++				goto out;
++			}
++
++			err = tsocket_bsd_error_from_errno(ret, errno, &retry);
++			if (retry) {
++				if (!wait && !state->ret) {
++					goto out;
++				}
++
++				/* retry */
++			wait:
++				FD_ZERO(&set);
++				FD_SET(bsds->fd, &set);
++
++				ret = select(bsds->fd + 1, &set, NULL, NULL, NULL);
++				if (ret < 0) {
++					if (errno == EINTR)
++						goto wait;
++
++					comcerto_req_error(&req->state, errno);
++					goto out;
++				}
++
++				continue;
++			}
++
++			if (comcerto_req_error(&req->state, err)) {
++				goto out;
++			}
++		}
++
++		state->ret += ret;
++
++		vector->iov_base = (uint8_t *)vector->iov_base + ret;
++		vector->iov_len -= ret;
++	}
++
++out:
++	return;
++}
++
++static void comcerto_tstream_bsd_readv_send(struct comcerto_tstream_readv_req *req,
++					struct tstream_context *stream,
++					struct iovec *vector,
++					bool wait)
++{
++	struct comcerto_tstream_bsd_readv_state *state = &req->bsd_readv_state;
++
++	state->ret	= 0;
++
++	comcerto_tstream_bsd_readv_handler(req, stream, vector, wait);
++
++	return;
++}
++
++static int comcerto_tstream_bsd_readv_recv(struct comcerto_tstream_readv_req *req)
++{
++	struct comcerto_tstream_bsd_readv_state *state = &req->bsd_readv_state;
++	int ret;
++
++	/* tsocket_simple_int_recv() + tevent_req_is_error() */
++	if (req->state.state == TEVENT_REQ_USER_ERROR) {
++		ret = -1;
++	}
++	else
++		ret = state->ret;
++
++	return ret;
++}
++
++#endif /* CONFIG_COMCERTO_READV */
++
++#ifdef CONFIG_COMCERTO_WRITEV
++
++static inline void comcerto_tstream_bsd_writev_handler(struct comcerto_tstream_writev_req *req,
++						       struct tstream_context *stream,
++						       struct iovec *vector,
++						       size_t count)
++{
++	struct tstream_bsd *bsds = tstream_context_data(stream, struct tstream_bsd);
++	ssize_t ret;
++	int err;
++	bool retry;
++	fd_set set;
++
++	while (1) {
++	retry:
++		ret = writev(bsds->fd, vector, count);
++		if (ret <= 0) {
++			if (ret == 0) {
++				/* propagate end of file */
++				comcerto_req_error(&req->state, EPIPE);
++				return;
++			}
++
++			err = tsocket_bsd_error_from_errno(ret, errno, &retry);
++			if (retry) {
++			wait:
++				FD_ZERO(&set);
++				FD_SET(bsds->fd, &set);
++
++				ret = select(bsds->fd + 1, NULL, &set, NULL, NULL);
++				if (ret < 0) {
++					if (errno == EINTR)
++						goto wait;
++
++					comcerto_req_error(&req->state, errno);
++					return;
++				}
++
++				/* retry */
++				goto retry;
++			}
++
++			if (comcerto_req_error(&req->state, err)) {
++				return;
++			}
++		}
++
++		req->ret += ret;
++
++		while (ret > 0) {
++			if (ret < vector[0].iov_len) {
++				uint8_t *base;
++				base = (uint8_t *)vector[0].iov_base;
++				base += ret;
++				vector[0].iov_base = (void *)base;
++				vector[0].iov_len -= ret;
++				goto retry;
++			}
++
++			ret -= vector[0].iov_len;
++			vector += 1;
++			count -= 1;
++		}
++
++		/*
++		 * there're maybe some empty vectors at the end
++		 * which we need to skip, otherwise we would get
++		 * ret == 0 from the writev() call and return EPIPE
++		 */
++		while (count > 0) {
++			if (vector[0].iov_len > 0) {
++				goto retry;
++			}
++			vector += 1;
++			count -= 1;
++		}
++
++		if (!count)
++			break;
++	}
++
++	comcerto_req_done(&req->state);
++}
++
++static void comcerto_tstream_bsd_writev_send(struct comcerto_tstream_writev_req *req,
++						 struct tstream_context *stream,
++						 struct iovec *vector,
++						 size_t count)
++{
++	struct tstream_bsd *bsds = tstream_context_data(stream, struct tstream_bsd);
++
++	if (bsds->fd == -1) {
++		comcerto_req_error(&req->state, ENOTCONN);
++		goto out;
++	}
++
++	comcerto_tstream_bsd_writev_handler(req, stream, vector, count);
++
++out:
++	return;
++}
++
++#endif /* CONFIG_COMCERTO_WRITEV */
++
++
+ static const struct tstream_context_ops tstream_bsd_ops = {
+ 	.name			= "bsd",
+ 
+@@ -2008,6 +2192,15 @@ static const struct tstream_context_ops tstream_bsd_ops = {
+ 
+ 	.disconnect_send	= tstream_bsd_disconnect_send,
+ 	.disconnect_recv	= tstream_bsd_disconnect_recv,
++
++#ifdef CONFIG_COMCERTO_READV
++	.comcerto_readv_send	= comcerto_tstream_bsd_readv_send,
++	.comcerto_readv_recv	= comcerto_tstream_bsd_readv_recv,
++#endif
++
++#ifdef CONFIG_COMCERTO_WRITEV
++	.comcerto_writev_send		= comcerto_tstream_bsd_writev_send,
++#endif
+ };
+ 
+ static int tstream_bsd_destructor(struct tstream_bsd *bsds)
+diff --git a/lib/tsocket/tsocket_helpers.c b/lib/tsocket/tsocket_helpers.c
+index 49c6840..db5ca1d 100644
+--- a/lib/tsocket/tsocket_helpers.c
++++ b/lib/tsocket/tsocket_helpers.c
+@@ -556,3 +556,121 @@ int tstream_writev_queue_recv(struct tevent_req *req, int *perrno)
+ 	return ret;
+ }
+ 
++#ifdef CONFIG_COMCERTO_READV
++
++extern void comcerto_smbd_smb2_request_read_done(struct comcerto_tstream_readv_req *subreq);
++
++/* This function needs to be re-entrant and is the only point of asynchronous processing
++when reading from the socket. So it can return with the request still pending and data to be read*/
++static void comcerto_tstream_readv_pdu_ask_for_next_vector(void *private_data)
++{
++	struct comcerto_tstream_readv_req *req = private_data;
++	struct comcerto_tstream_readv_pdu_state *state = &req->readv_pdu_state;
++	struct tstream_context *stream = state->caller.stream;
++	struct tstream_bsd *bsds;
++	int count;
++	int ret;
++
++	if (!req->sync) {
++		bsds = tstream_context_data(stream, struct tstream_bsd);
++
++		tstream_bsd_set_readable_handler(bsds, NULL, NULL, NULL);
++	}
++
++	if (bsds->fd == -1) {
++		comcerto_req_error(&req->state, ENOTCONN);
++		goto out;
++	}
++
++#if 0
++	/* FIXME I think it's still valid to check this condition, but it's not clear what we should do:
++	really return an error and stop everything or just go back to main loop */
++	if (stream->readv_req) {
++		comcerto_req_error(&req->state, EBUSY);
++		goto out;
++	}
++	stream->readv_req = req;
++#endif
++
++	while (1) {
++		if (req->sync || state->total_read) {
++			ret = state->caller.next_vector_fn(stream,
++						   state->caller.next_vector_private,
++						   state, &state->vector, &count);
++			if (ret == -1) {
++				comcerto_req_error(&req->state, errno);
++				break;
++			}
++
++			if (count == 0) {
++				comcerto_req_done(&req->state);
++				break;
++			}
++		}
++
++		stream->ops->comcerto_readv_send(req, stream, &state->vector, !!state->total_read);
++
++		ret = stream->ops->comcerto_readv_recv(req);
++		if (ret <= 0) {
++			if (ret == 0) {
++				bsds = tstream_context_data(stream, struct tstream_bsd);
++
++				if (tstream_bsd_set_readable_handler(bsds, state->caller.ev, comcerto_tstream_readv_pdu_ask_for_next_vector, req) < 0) {
++					comcerto_req_error(&req->state, errno);
++					break;
++				}
++
++				req->sync = false;
++
++				return;
++			}
++
++			break;
++		}
++
++		state->total_read += ret;
++	}
++
++out:
++	/* Here we need to call all the different callbacks */
++	comcerto_smbd_smb2_request_read_done(req);
++
++	return;
++}
++
++void comcerto_tstream_readv_pdu_send(struct comcerto_tstream_readv_req *req,
++				struct tevent_context *ev,
++				struct tstream_context *stream,
++				comcerto_tstream_readv_pdu_next_vector_t next_vector_fn,
++				void *next_vector_private)
++{
++	struct comcerto_tstream_readv_pdu_state *state = &req->readv_pdu_state;
++
++	state->caller.ev			= ev;
++	state->caller.stream			= stream;
++	state->caller.next_vector_fn		= next_vector_fn;
++	state->caller.next_vector_private	= next_vector_private;
++
++	state->total_read	= 0;
++
++	req->sync = true;
++
++	comcerto_tstream_readv_pdu_ask_for_next_vector(req);
++}
++
++int comcerto_tstream_readv_pdu_recv(struct comcerto_tstream_readv_req *req, int *perrno)
++{
++	struct comcerto_tstream_readv_pdu_state *state = &req->readv_pdu_state;
++	int ret;
++
++	if (req->state.state == TEVENT_REQ_USER_ERROR) {
++		*perrno = req->state.error;
++		ret = -1;
++	}
++	else
++		ret = state->total_read;
++
++	return ret;
++}
++
++#endif /* CONFIG_COMCERTO_READV */
+diff --git a/lib/tsocket/tsocket_internal.h b/lib/tsocket/tsocket_internal.h
+index 154b2ce..9d6a532 100644
+--- a/lib/tsocket/tsocket_internal.h
++++ b/lib/tsocket/tsocket_internal.h
+@@ -122,6 +122,22 @@ struct tstream_context_ops {
+ 					      struct tstream_context *stream);
+ 	int (*disconnect_recv)(struct tevent_req *req,
+ 			       int *perrno);
++
++#ifdef CONFIG_COMCERTO_READV
++	void (*comcerto_readv_send)(struct comcerto_tstream_readv_req *req,
++				    struct tstream_context *stream,
++				    struct iovec *vector,
++				    bool wait);
++
++	int (*comcerto_readv_recv)(struct comcerto_tstream_readv_req *req);
++#endif
++
++#ifdef CONFIG_COMCERTO_WRITEV
++	void (*comcerto_writev_send)(struct comcerto_tstream_writev_req *req,
++				     struct tstream_context *stream,
++				     struct iovec *vector,
++				     size_t count);
++#endif
+ };
+ 
+ struct tstream_context *_tstream_context_create(TALLOC_CTX *mem_ctx,
+@@ -134,11 +150,42 @@ struct tstream_context *_tstream_context_create(TALLOC_CTX *mem_ctx,
+ 	_tstream_context_create(mem_ctx, ops, state, sizeof(type), \
+ 				#type, location)
+ 
+-void *_tstream_context_data(struct tstream_context *stream);
+ #define tstream_context_data(_req, _type) \
+ 	talloc_get_type_abort(_tstream_context_data(_req), _type)
+ 
+ int tsocket_simple_int_recv(struct tevent_req *req, int *perrno);
+ 
++struct tstream_context {
++	const char *location;
++	const struct tstream_context_ops *ops;
++	void *private_data;
++
++	struct tevent_req *readv_req;
++	struct tevent_req *writev_req;
++};
++
++struct tstream_bsd {
++	int fd;
++
++	void *event_ptr;
++	struct tevent_fd *fde;
++	bool optimize_readv;
++
++	void *readable_private;
++	void (*readable_handler)(void *private_data);
++	void *writeable_private;
++	void (*writeable_handler)(void *private_data);
++};
++
++int tstream_bsd_set_readable_handler(struct tstream_bsd *bsds,
++					    struct tevent_context *ev,
++					    void (*handler)(void *private_data),
++					    void *private_data);
++
++static inline void *_tstream_context_data(struct tstream_context *stream)
++{
++	return stream->private_data;
++}
++
+ #endif /* _TSOCKET_H */
+ 
+diff --git a/source3/include/smb_macros.h b/source3/include/smb_macros.h
+index 8b9d941..b575a0c 100644
+--- a/source3/include/smb_macros.h
++++ b/source3/include/smb_macros.h
+@@ -215,12 +215,21 @@ copy an IP address from one buffer to another
+ #define SMB_XMALLOC_P(type) (type *)smb_xmalloc_array(sizeof(type),1)
+ #define SMB_XMALLOC_ARRAY(type,count) (type *)smb_xmalloc_array(sizeof(type),(count))
+ 
++#ifdef SANITY_CHECKS
+ #define TALLOC(ctx, size) talloc_named_const(ctx, size, __location__)
+ #define TALLOC_ZERO(ctx, size) _talloc_zero(ctx, size, __location__)
+ #define TALLOC_SIZE(ctx, size) talloc_named_const(ctx, size, __location__)
+ #define TALLOC_ZERO_SIZE(ctx, size) _talloc_zero(ctx, size, __location__)
+ 
+ #define TALLOC_REALLOC(ctx, ptr, count) _talloc_realloc(ctx, ptr, count, __location__)
++#else
++#define TALLOC(ctx, size) __talloc(ctx, size)
++#define TALLOC_ZERO(ctx, size) _talloc_zero(ctx, size)
++#define TALLOC_SIZE(ctx, size) talloc_named_const(ctx, size)
++#define TALLOC_ZERO_SIZE(ctx, size) _talloc_zero(ctx, size)
++
++#define TALLOC_REALLOC(ctx, ptr, count) _talloc_realloc(ctx, ptr, count)
++#endif
+ #define talloc_destroy(ctx) talloc_free(ctx)
+ #ifndef TALLOC_FREE
+ #define TALLOC_FREE(ctx) do { talloc_free(ctx); ctx=NULL; } while(0)
+diff --git a/source3/lib/recvfile.c b/source3/lib/recvfile.c
+index c53ba77..6399a45 100644
+--- a/source3/lib/recvfile.c
++++ b/source3/lib/recvfile.c
+@@ -42,6 +42,213 @@
+ #define TRANSFER_BUF_SIZE (128*1024)
+ #endif
+ 
++#if defined (CONFIG_COMCERTO_SMB_SPLICE)
++
++ssize_t smb_splice_read(int fd, int pipefd, size_t length)
++{
++	int nread = 0;
++	int to_read = length;
++
++	while (to_read > 0) {
++		nread = splice(fd, NULL, pipefd, NULL, to_read, SPLICE_F_MOVE | SPLICE_F_NONBLOCK);
++		if (nread == -1) {
++			// handling errors:
++			if (errno == EAGAIN) {
++				// EAGAIN : exit from the loop
++				// Pipe buffer is full, so let's go empty it
++				//DEBUG(0,("smb_splice_read EAGAIN\n"));
++				break;
++			} else if (errno == EINTR) {
++				// EINTR : do nothing
++				// process has been interrupted by a signal event, but pipe is not full, loop and start another read
++				//DEBUG(0,("smb_splice_read EINTR\n"));
++				continue;
++			} else  {
++				//DEBUG(0,("smb_splice_read %x %d\n", errno, to_read));
++				return -1;
++			}
++		} else 	if (nread == 0) {
++			//DEBUG(0,("smb_splice_read (nread == 0) %x %d\n", errno, to_read));
++			break;
++		}
++		to_read -= nread;
++	}
++
++	return length - to_read;
++}
++
++ssize_t smb_splice_write(int fd, int pipefd, loff_t *offset, size_t length)
++{
++	int written = 0;
++	int to_write = length;
++
++	while (to_write > 0) {
++		written = splice(pipefd, NULL, fd,
++				 offset, to_write,
++				 SPLICE_F_MOVE|SPLICE_F_MORE);
++		if (written == -1) {
++			// handling errors:
++			if (errno == EINTR) {
++				// EINTR : do nothing
++				// process has been interrupted by a signal event, but pipe is not full, loop and start another read
++				//DEBUG(0,("smb_splice_write EINTR\n"));
++				continue;
++			} else {
++				//DEBUG(0,("smb_splice_write %x %d\n",errno, to_write));
++				return -1;
++			}
++		}
++		to_write -= written;
++	}
++
++	return  length - to_write;
++}
++
++ssize_t default_sys_recvfile(int fromfd,
++			int tofd,
++			off_t offset,
++			size_t count)
++{
++/*
++ * 64K WA: increase number of pages in the splice pipe
++ * current LRO implementation only fills up pages up to 16K (1/4 of the page)	
++ */
++#define PIPE_BUF_SIZE		(32 * 65536) // 4 Mbytes, to be reduced
++#define SMB_SPLICE_BUF_SIZE	128 * 1024
++
++	static int pipefd[2] = {-1 , -1};
++	int saved_errno = 0;
++	size_t total_written = 0;
++	int to_write = count;
++	loff_t splice_offset = offset;
++
++	if (count == 0) {
++		return 0;
++	}
++
++	DEBUG(10,("sys_recvfile: from = %d, to = %d, "
++		"offset=%.0f, count = %lu\n",
++		fromfd, tofd, (double)offset,
++		(unsigned long)count));
++
++	if (pipefd[0] == -1)
++	{
++		/* open pipes*/
++		if (pipe(pipefd) < 0) {
++			return -1;
++		}
++
++		/* Only supported in Linux 2.6.35 and above */
++		fcntl(pipefd[0], F_SETPIPE_SZ, PIPE_BUF_SIZE);
++	}
++
++	while (to_write > 0) {
++		int nread, written;
++		nread = smb_splice_read(fromfd, pipefd[1], MIN(to_write, SMB_SPLICE_BUF_SIZE));
++		if(nread == -1) {
++			//DEBUG(0,("sys_recvfile (read) drain %x\n",to_write));
++			total_written = (count - to_write);
++			goto splice_error;
++		} else if ( (nread != MIN(to_write, SMB_SPLICE_BUF_SIZE)) && (errno != EAGAIN) ) {	
++			// error loss of connection
++			//DEBUG(0,("sys_recvfile (read) loss of connection drain %d\n",(to_write-nread)));
++			total_written = (count - to_write);
++			to_write-=nread; // this is used to drain the socket
++			goto splice_error;
++		}
++
++		written = smb_splice_write(tofd, pipefd[0], &splice_offset, nread);
++		// handling errors
++		if (written == -1) {
++			//DEBUG(0,("sys_recvfile (write) drain %d\n",to_write));
++			to_write-=nread; // this is used to drain the socket
++			total_written = -1;
++			goto splice_error;
++			
++		} else if (nread != written) {	
++			//DEBUG(0,("sys_recvfile (write) drain %d\n",to_write));
++			total_written = count - to_write + written;
++			to_write-=nread; // this is used to drain the socket
++			goto splice_error;
++		}
++		to_write -= written;
++	}
++
++	return (count - to_write);
++
++splice_error:
++	saved_errno = errno;
++	drain_socket(fromfd, to_write);
++	close(pipefd[0]);
++	close(pipefd[1]);
++	pipefd[0] = -1;
++	pipefd[1] = -1;
++	errno = saved_errno;
++
++	return total_written;
++}
++
++/*
++ * For platforms that support direct splice-from-socket-to-file
++ */
++ssize_t sys_recvfile(int fromfd,
++			int tofd,
++			off_t offset,
++			size_t count)
++{
++	size_t total_written = 0;
++	loff_t splice_offset = offset;
++	static bool has_splice_from_socket = true;
++
++	if (!has_splice_from_socket)
++		return default_sys_recvfile(fromfd, tofd, offset, count);
++
++	DEBUG(10,("%s: from = %d, to = %d, "
++		"offset=%.0f, count = %lu\n",
++		__func__,
++		fromfd, tofd, (double)offset,
++		(unsigned long)count));
++
++	if (!count)
++		return 0;
++
++	while (count > 0) {
++		int nwritten;
++
++		nwritten = splice(fromfd, NULL, tofd, &splice_offset, count,
++				  SPLICE_F_MOVE);
++		if (nwritten < 0) {
++			/* If platform does not support direct splice-from-
++			 * socket, fall back.
++			 */
++			if (errno == EBADF) {
++				DEBUG(5,("%s: splice from socket unavailable. "
++					"Falls back to default_sys_recvfile.\n",
++					__func__));
++				has_splice_from_socket = false;
++				return default_sys_recvfile(fromfd, tofd,
++							    offset, count);
++			}
++			break;
++		}
++		count -= nwritten;
++		offset += nwritten;
++		total_written += nwritten;
++	}
++
++	if (count) {
++		int saved_errno = errno;
++		if (drain_socket(fromfd, count) != count) {
++			/* socket is dead. */
++			return -1;
++		}
++		errno = saved_errno;
++	}
++
++	return total_written;
++}
++
++#else
+ static ssize_t default_sys_recvfile(int fromfd,
+ 			int tofd,
+ 			off_t offset,
+@@ -237,6 +444,8 @@ ssize_t sys_recvfile(int fromfd,
+ }
+ #endif
+ 
++#endif
++
+ /*****************************************************************
+  Throw away "count" bytes from the client socket.
+  Returns count or -1 on error.
+diff --git a/source3/registry/reg_parse_prs.c b/source3/registry/reg_parse_prs.c
+index 14aa3fa..44e4e25 100644
+--- a/source3/registry/reg_parse_prs.c
++++ b/source3/registry/reg_parse_prs.c
+@@ -111,8 +111,12 @@ char *prs_alloc_mem(prs_struct *ps, size_t size, unsigned int count)
+ 
+ 	if (size && count) {
+ 		/* We can't call the type-safe version here. */
++#ifdef SANITY_CHECKS
+ 		ret = (char *)_talloc_zero_array(ps->mem_ctx, size, count,
+ 						 "parse_prs");
++#else
++		ret = (char *)_talloc_zero_array(ps->mem_ctx, size, count);
++#endif
+ 	}
+ 	return ret;
+ }
+diff --git a/source3/smbd/globals.h b/source3/smbd/globals.h
+index 0d0ebcd..ac6cc1e 100644
+--- a/source3/smbd/globals.h
++++ b/source3/smbd/globals.h
+@@ -504,6 +504,7 @@ struct smbd_smb2_request {
+ #define SMBD_SMB2_DYN_IOV_OFS 3
+ 
+ #define SMBD_SMB2_NUM_IOV_PER_REQ 4
++#define SMBD_NBT_MAX_SIZE	(66 * 1024)
+ 
+ #define SMBD_SMB2_IOV_IDX_OFS(req,dir,idx,ofs) \
+ 	(&req->dir.vector[(idx)+(ofs)])
+@@ -585,6 +586,16 @@ struct smbd_smb2_request {
+ 		struct iovec *vector;
+ 		int vector_count;
+ 	} out;
++#if defined (CONFIG_COMCERTO_SMB_SPLICE)
++	bool splice;
++#endif
++#ifdef CONFIG_COMCERTO_READV
++	uint8_t comcerto_pktbuf[SMBD_NBT_MAX_SIZE]; /* Big enough to contain all the data that we don't splice, if we ever get a really big
++						nbt we should fallback to a real talloc() (and have some flag to signal this */
++
++	struct iovec vector[1 + SMBD_SMB2_NUM_IOV_PER_REQ];
++
++#endif
+ };
+ 
+ struct smbd_server_connection;
+@@ -726,7 +737,11 @@ struct smbd_server_connection {
+ 		} locks;
+ 	} smb1;
+ 	struct {
++#ifdef CONFIG_COMCERTO_READV
++		bool recv_pending;
++#else
+ 		struct tevent_queue *recv_queue;
++#endif
+ 		struct tevent_queue *send_queue;
+ 		struct tstream_context *stream;
+ 		bool negprot_2ff;
+diff --git a/source3/smbd/process.c b/source3/smbd/process.c
+index fd2c6a4..731c2ae 100644
+--- a/source3/smbd/process.c
++++ b/source3/smbd/process.c
+@@ -3296,6 +3296,7 @@ void smbd_process(struct tevent_context *ev_ctx,
+ 	const char *locaddr = NULL;
+ 	const char *remaddr = NULL;
+ 	char *rhost;
++	int count;
+ 	int ret;
+ 
+ 	conn = talloc_zero(ev_ctx, struct smbXsrv_connection);
+@@ -3613,8 +3614,10 @@ void smbd_process(struct tevent_context *ev_ctx,
+ 
+ 	tevent_set_trace_callback(ev_ctx, smbd_tevent_trace_callback, conn);
+ 
++	count = 0;
+ 	while (True) {
+-		frame = talloc_stackframe_pool(8192);
++		if (!(count & 0xf))
++			frame = talloc_stackframe_pool(8192);
+ 
+ 		errno = 0;
+ 		if (tevent_loop_once(ev_ctx) == -1) {
+@@ -3625,7 +3628,10 @@ void smbd_process(struct tevent_context *ev_ctx,
+ 			}
+ 		}
+ 
+-		TALLOC_FREE(frame);
++		count++;
++
++		if (!(count & 0xf))
++			TALLOC_FREE(frame);
+ 	}
+ 
+ 	exit_server_cleanly(NULL);
+diff --git a/source3/smbd/smb2_server.c b/source3/smbd/smb2_server.c
+index d92302e..7b9d0d6 100644
+--- a/source3/smbd/smb2_server.c
++++ b/source3/smbd/smb2_server.c
+@@ -201,10 +201,14 @@ static NTSTATUS smbd_initialize_smb2(struct smbd_server_connection *sconn)
+ 
+ 	TALLOC_FREE(sconn->smb1.fde);
+ 
++#ifdef CONFIG_COMCERTO_READV
++	sconn->smb2.recv_pending = false;
++#else
+ 	sconn->smb2.recv_queue = tevent_queue_create(sconn, "smb2 recv queue");
+ 	if (sconn->smb2.recv_queue == NULL) {
+ 		return NT_STATUS_NO_MEMORY;
+ 	}
++#endif
+ 
+ 	sconn->smb2.send_queue = tevent_queue_create(sconn, "smb2 send queue");
+ 	if (sconn->smb2.send_queue == NULL) {
+@@ -270,13 +274,22 @@ static struct smbd_smb2_request *smbd_smb2_request_allocate(TALLOC_CTX *mem_ctx)
+ 	/* Enable this to find subtle valgrind errors. */
+ 	mem_pool = talloc_init("smbd_smb2_request_allocate");
+ #else
++#ifdef CONFIG_COMCERTO_READV
++	mem_pool = talloc_pool(mem_ctx, 8192 + SMBD_NBT_MAX_SIZE);
++#else
+ 	mem_pool = talloc_pool(mem_ctx, 8192);
+ #endif
++#endif
+ 	if (mem_pool == NULL) {
+ 		return NULL;
+ 	}
+ 
++#ifdef CONFIG_COMCERTO_READV
++	req = __talloc(mem_pool, sizeof(struct smbd_smb2_request));
++
++#else
+ 	req = talloc_zero(mem_pool, struct smbd_smb2_request);
++#endif
+ 	if (req == NULL) {
+ 		talloc_free(mem_pool);
+ 		return NULL;
+@@ -284,6 +297,10 @@ static struct smbd_smb2_request *smbd_smb2_request_allocate(TALLOC_CTX *mem_ctx)
+ 	talloc_reparent(mem_pool, mem_ctx, req);
+ 	TALLOC_FREE(mem_pool);
+ 
++#ifdef CONFIG_COMCERTO_READV
++	memset(req, 0, (void *)&req->comcerto_pktbuf - (void *)req);
++#endif
++
+ 	req->last_session_id = UINT64_MAX;
+ 	req->last_tid = UINT32_MAX;
+ 
+@@ -296,10 +313,11 @@ static NTSTATUS smbd_smb2_inbuf_parse_compound(struct smbXsrv_connection *conn,
+ 					       NTTIME now,
+ 					       uint8_t *buf,
+ 					       size_t buflen,
+-					       TALLOC_CTX *mem_ctx,
++					       struct smbd_smb2_request *req,
+ 					       struct iovec **piov,
+ 					       int *pnum_iov)
+ {
++	TALLOC_CTX *mem_ctx = req;
+ 	struct iovec *iov;
+ 	int num_iov = 1;
+ 	size_t taken = 0;
+@@ -307,14 +325,20 @@ static NTSTATUS smbd_smb2_inbuf_parse_compound(struct smbXsrv_connection *conn,
+ 	size_t verified_buflen = 0;
+ 	uint8_t *tf = NULL;
+ 	size_t tf_len = 0;
++	struct iovec *iov_tmp = NULL;
++	NTSTATUS ret = NT_STATUS_INVALID_PARAMETER;
+ 
+ 	/*
+ 	 * Note: index '0' is reserved for the transport protocol
+ 	 */
+-	iov = talloc_zero_array(mem_ctx, struct iovec, num_iov);
++#ifdef CONFIG_COMCERTO_READV
++	iov = &req->vector[0];
++#else
++	iov = talloc_zero_array(mem_ctx, struct iovec, num_iov + SMBD_SMB2_NUM_IOV_PER_REQ);
+ 	if (iov == NULL) {
+ 		return NT_STATUS_NO_MEMORY;
+ 	}
++#endif
+ 
+ 	while (taken < buflen) {
+ 		size_t len = buflen - taken;
+@@ -326,7 +350,6 @@ static NTSTATUS smbd_smb2_inbuf_parse_compound(struct smbXsrv_connection *conn,
+ 		uint8_t *body = NULL;
+ 		uint32_t dyn_size;
+ 		uint8_t *dyn = NULL;
+-		struct iovec *iov_tmp;
+ 
+ 		if (verified_buflen > taken) {
+ 			len = verified_buflen - taken;
+@@ -338,7 +361,7 @@ static NTSTATUS smbd_smb2_inbuf_parse_compound(struct smbXsrv_connection *conn,
+ 		if (len < 4) {
+ 			DEBUG(10, ("%d bytes left, expected at least %d\n",
+ 				   (int)len, 4));
+-			goto inval;
++			goto out;
+ 		}
+ 		if (IVAL(hdr, 0) == SMB2_TF_MAGIC) {
+ 			struct smbXsrv_session *s = NULL;
+@@ -351,7 +374,7 @@ static NTSTATUS smbd_smb2_inbuf_parse_compound(struct smbXsrv_connection *conn,
+ 				DEBUG(10, ("Got SMB2_TRANSFORM header, "
+ 					   "but dialect[0x%04X] is used\n",
+ 					   conn->smb2.server.dialect));
+-				goto inval;
++				goto out;
+ 			}
+ 
+ 			if (!(conn->smb2.server.capabilities & SMB2_CAP_ENCRYPTION)) {
+@@ -360,13 +383,13 @@ static NTSTATUS smbd_smb2_inbuf_parse_compound(struct smbXsrv_connection *conn,
+ 					   "client[0x%08X] server[0x%08X]\n",
+ 					   conn->smb2.client.capabilities,
+ 					   conn->smb2.server.capabilities));
+-				goto inval;
++				goto out;
+ 			}
+ 
+ 			if (len < SMB2_TF_HDR_SIZE) {
+ 				DEBUG(1, ("%d bytes left, expected at least %d\n",
+ 					   (int)len, SMB2_TF_HDR_SIZE));
+-				goto inval;
++				goto out;
+ 			}
+ 			tf = hdr;
+ 			tf_len = SMB2_TF_HDR_SIZE;
+@@ -380,7 +403,7 @@ static NTSTATUS smbd_smb2_inbuf_parse_compound(struct smbXsrv_connection *conn,
+ 				DEBUG(1, ("%d bytes left, expected at least %d\n",
+ 					   (int)len,
+ 					   (int)(SMB2_TF_HDR_SIZE + enc_len)));
+-				goto inval;
++				goto out;
+ 			}
+ 
+ 			status = smb2srv_session_lookup(conn, uid, now, &s);
+@@ -388,8 +411,8 @@ static NTSTATUS smbd_smb2_inbuf_parse_compound(struct smbXsrv_connection *conn,
+ 				DEBUG(1, ("invalid session[%llu] in "
+ 					  "SMB2_TRANSFORM header\n",
+ 					   (unsigned long long)uid));
+-				TALLOC_FREE(iov);
+-				return NT_STATUS_USER_SESSION_DELETED;
++				ret = NT_STATUS_USER_SESSION_DELETED;
++				goto out;
+ 			}
+ 
+ 			tf_iov[0].iov_base = (void *)tf;
+@@ -401,8 +424,8 @@ static NTSTATUS smbd_smb2_inbuf_parse_compound(struct smbXsrv_connection *conn,
+ 							  conn->protocol,
+ 							  tf_iov, 2);
+ 			if (!NT_STATUS_IS_OK(status)) {
+-				TALLOC_FREE(iov);
+-				return status;
++				ret = status;
++				goto out;
+ 			}
+ 
+ 			verified_buflen = taken + enc_len;
+@@ -416,17 +439,17 @@ static NTSTATUS smbd_smb2_inbuf_parse_compound(struct smbXsrv_connection *conn,
+ 		if (len < SMB2_HDR_BODY + 2) {
+ 			DEBUG(10, ("%d bytes left, expected at least %d\n",
+ 				   (int)len, SMB2_HDR_BODY));
+-			goto inval;
++			goto out;
+ 		}
+ 		if (IVAL(hdr, 0) != SMB2_MAGIC) {
+ 			DEBUG(10, ("Got non-SMB2 PDU: %x\n",
+ 				   IVAL(hdr, 0)));
+-			goto inval;
++			goto out;
+ 		}
+ 		if (SVAL(hdr, 4) != SMB2_HDR_BODY) {
+ 			DEBUG(10, ("Got HDR len %d, expected %d\n",
+ 				   SVAL(hdr, 4), SMB2_HDR_BODY));
+-			goto inval;
++			goto out;
+ 		}
+ 
+ 		full_size = len;
+@@ -435,15 +458,15 @@ static NTSTATUS smbd_smb2_inbuf_parse_compound(struct smbXsrv_connection *conn,
+ 
+ 		if (next_command_ofs != 0) {
+ 			if (next_command_ofs < (SMB2_HDR_BODY + 2)) {
+-				goto inval;
++				goto out;
+ 			}
+ 			if (next_command_ofs > full_size) {
+-				goto inval;
++				goto out;
+ 			}
+ 			full_size = next_command_ofs;
+ 		}
+ 		if (body_size < 2) {
+-			goto inval;
++			goto out;
+ 		}
+ 		body_size &= 0xfffe;
+ 
+@@ -457,13 +480,31 @@ static NTSTATUS smbd_smb2_inbuf_parse_compound(struct smbXsrv_connection *conn,
+ 		dyn = body + body_size;
+ 		dyn_size = full_size - (SMB2_HDR_BODY + body_size);
+ 
++#ifdef CONFIG_COMCERTO_READV
++		/* If we overflow our static iovec fallback to dynamic alocation */
++		if (num_iov == (1 + SMBD_SMB2_NUM_IOV_PER_REQ)) {
++			iov_tmp = talloc_zero_array(mem_ctx, struct iovec, num_iov + SMBD_SMB2_NUM_IOV_PER_REQ);
++			if (iov_tmp == NULL) {
++				ret = NT_STATUS_NO_MEMORY;
++				goto out;
++			}
++
++			memcpy(iov_tmp, iov, num_iov * sizeof(struct iovec));
++			iov = iov_tmp;
++		} else if (num_iov > (1 + SMBD_SMB2_NUM_IOV_PER_REQ)) {
++#endif
+ 		iov_tmp = talloc_realloc(mem_ctx, iov, struct iovec,
+ 					 num_iov + SMBD_SMB2_NUM_IOV_PER_REQ);
+ 		if (iov_tmp == NULL) {
+-			TALLOC_FREE(iov);
+-			return NT_STATUS_NO_MEMORY;
++			ret = NT_STATUS_NO_MEMORY;
++			goto out;
+ 		}
+ 		iov = iov_tmp;
++
++#ifdef CONFIG_COMCERTO_READV
++		}
++#endif
++
+ 		cur = &iov[num_iov];
+ 		num_iov += SMBD_SMB2_NUM_IOV_PER_REQ;
+ 
+@@ -483,9 +524,13 @@ static NTSTATUS smbd_smb2_inbuf_parse_compound(struct smbXsrv_connection *conn,
+ 	*pnum_iov = num_iov;
+ 	return NT_STATUS_OK;
+ 
+-inval:
+-	TALLOC_FREE(iov);
+-	return NT_STATUS_INVALID_PARAMETER;
++out:
++#ifdef CONFIG_COMCERTO_READV
++	if (iov_tmp)
++#endif
++		TALLOC_FREE(iov);
++
++	return ret;
+ }
+ 
+ static NTSTATUS smbd_smb2_request_create(struct smbd_server_connection *sconn,
+@@ -1681,7 +1726,7 @@ static NTSTATUS smbd_smb2_request_check_tcon(struct smbd_smb2_request *req)
+ /*************************************************************
+  Ensure an incoming session_id is a valid one for us to access.
+ *************************************************************/
+-
++static struct auth_session_info *current_session_info;
+ static NTSTATUS smbd_smb2_request_check_session(struct smbd_smb2_request *req)
+ {
+ 	const uint8_t *inhdr;
+@@ -1751,9 +1796,13 @@ static NTSTATUS smbd_smb2_request_check_session(struct smbd_smb2_request *req)
+ 		return NT_STATUS_INVALID_HANDLE;
+ 	}
+ 
+-	set_current_user_info(session_info->unix_info->sanitized_username,
+-			      session_info->unix_info->unix_name,
+-			      session_info->info->domain_name);
++	if (current_session_info != session_info) {
++		set_current_user_info(session_info->unix_info->sanitized_username,
++							session_info->unix_info->unix_name,
++							session_info->info->domain_name);
++		current_session_info = session_info;
++	}
++
+ 
+ 	return NT_STATUS_OK;
+ }
+@@ -2259,10 +2308,18 @@ NTSTATUS smbd_smb2_request_dispatch(struct smbd_smb2_request *req)
+ 	return return_value;
+ }
+ 
++#ifdef CONFIG_COMCERTO_WRITEV
++static void comcerto_smbd_smb2_request_writev_done(struct comcerto_tstream_writev_req *subreq);
++#endif
++
+ static NTSTATUS smbd_smb2_request_reply(struct smbd_smb2_request *req)
+ {
+ 	struct smbXsrv_connection *conn = req->sconn->conn;
++#ifdef CONFIG_COMCERTO_WRITEV
++	struct comcerto_tstream_writev_req subreq;
++#else
+ 	struct tevent_req *subreq;
++#endif
+ 	int first_idx = 1;
+ 	struct iovec *firsttf = SMBD_SMB2_IDX_TF_IOV(req,out,first_idx);
+ 	struct iovec *outhdr = SMBD_SMB2_OUT_HDR_IOV(req);
+@@ -2433,6 +2490,15 @@ static NTSTATUS smbd_smb2_request_reply(struct smbd_smb2_request *req)
+ 		req->out.vector_count -= 1;
+ 	}
+ 
++#ifdef CONFIG_COMCERTO_WRITEV
++	subreq.smb2_req = req;
++	subreq.ret = -1;
++
++	comcerto_tstream_writev_send(&subreq,
++					   req->sconn->smb2.stream,
++					   req->out.vector,
++					   req->out.vector_count);
++#else
+ 	subreq = tstream_writev_queue_send(req,
+ 					   req->sconn->ev_ctx,
+ 					   req->sconn->smb2.stream,
+@@ -2443,12 +2509,18 @@ static NTSTATUS smbd_smb2_request_reply(struct smbd_smb2_request *req)
+ 		return NT_STATUS_NO_MEMORY;
+ 	}
+ 	tevent_req_set_callback(subreq, smbd_smb2_request_writev_done, req);
++#endif
++
+ 	/*
+ 	 * We're done with this request -
+ 	 * move it off the "being processed" queue.
+ 	 */
+ 	DLIST_REMOVE(req->sconn->smb2.requests, req);
+ 
++#ifdef CONFIG_COMCERTO_WRITEV
++	comcerto_smbd_smb2_request_writev_done(&subreq);
++#endif
++
+ 	return NT_STATUS_OK;
+ }
+ 
+@@ -2511,6 +2583,33 @@ static void smbd_smb2_request_writev_done(struct tevent_req *subreq)
+ 	}
+ }
+ 
++#ifdef CONFIG_COMCERTO_WRITEV
++static void comcerto_smbd_smb2_request_writev_done(struct comcerto_tstream_writev_req *subreq)
++{
++	struct smbd_smb2_request *req = subreq->smb2_req;
++	struct smbd_server_connection *sconn = req->sconn;
++	int ret;
++	int sys_errno;
++	NTSTATUS status;
++
++	ret = comcerto_tstream_writev_recv(subreq, &sys_errno);
++	TALLOC_FREE(req);
++	if (ret == -1) {
++		status = map_nt_error_from_unix(sys_errno);
++		DEBUG(2,("smbd_smb2_request_writev_done: client write error %s\n",
++			nt_errstr(status)));
++		smbd_server_connection_terminate(sconn, nt_errstr(status));
++		return;
++	}
++
++	status = smbd_smb2_request_next_incoming(sconn);
++	if (!NT_STATUS_IS_OK(status)) {
++		smbd_server_connection_terminate(sconn, nt_errstr(status));
++		return;
++	}
++}
++#endif
++
+ NTSTATUS smbd_smb2_request_done_ex(struct smbd_smb2_request *req,
+ 				   NTSTATUS status,
+ 				   DATA_BLOB body, DATA_BLOB *dyn,
+@@ -2816,6 +2915,10 @@ static void smbd_smb2_oplock_break_writev_done(struct tevent_req *subreq)
+ struct smbd_smb2_request_read_state {
+ 	struct tevent_context *ev;
+ 	struct smbd_server_connection *sconn;
++#ifdef CONFIG_COMCERTO_READV
++	struct comcerto_tstream_readv_req tstream_readv_req;
++	struct tevent_req *req;
++#endif
+ 	struct smbd_smb2_request *smb2_req;
+ 	struct {
+ 		uint8_t nbt[NBT_HDR_SIZE];
+@@ -2823,8 +2926,219 @@ struct smbd_smb2_request_read_state {
+ 	} hdr;
+ 	size_t pktlen;
+ 	uint8_t *pktbuf;
++#if defined (CONFIG_COMCERTO_SMB_SPLICE)
++	bool data_done;
++#endif
+ };
+ 
++#ifdef CONFIG_COMCERTO_READV
++
++static int comcerto_smbd_smb2_request_next_vector(struct tstream_context *stream,
++					 void *private_data,
++					 TALLOC_CTX *mem_ctx,
++					 struct iovec *_vector,
++					 size_t *_count);
++
++static struct tevent_req *comcerto_smbd_smb2_request_read_send(TALLOC_CTX *mem_ctx,
++					struct tevent_context *ev,
++					struct smbd_server_connection *sconn)
++{
++	struct tevent_req *req;
++	struct smbd_smb2_request_read_state *state;
++	int ret;
++
++	req = tevent_req_create(mem_ctx, &state,
++				struct smbd_smb2_request_read_state);
++	if (req == NULL) {
++		return NULL;
++	}
++	state->ev = ev;
++	state->sconn = sconn;
++
++	state->smb2_req = smbd_smb2_request_allocate(state);
++	if (tevent_req_nomem(state->smb2_req, req)) {
++		return tevent_req_post(req, ev);
++	}
++	state->smb2_req->sconn = sconn;
++	state->req = req;
++
++	sconn->smb2.recv_pending = true;
++
++	comcerto_tstream_readv_pdu_send(&state->tstream_readv_req,
++					state->ev,
++					state->sconn->smb2.stream,
++					comcerto_smbd_smb2_request_next_vector,
++					state);
++
++	return req;
++}
++
++#if defined(CONFIG_COMCERTO_SMB_SPLICE)
++static int comcerto_smbd_smb2_request_next_vector(struct tstream_context *stream,
++					 void *private_data,
++					 TALLOC_CTX *mem_ctx,
++					 struct iovec *_vector,
++					 size_t *_count)
++{
++	struct smbd_smb2_request_read_state *state =
++		talloc_get_type_abort(private_data,
++		struct smbd_smb2_request_read_state);
++	unsigned long pkt_length;
++	void *start;
++	unsigned long length;
++
++	if (state->data_done == true) {
++		/* if there're no remaining bytes, we're done */
++		*_count = 0;
++
++		return 0;
++	}
++
++	if (!state->hdr.done) {
++		/*
++		 * first we need to get the NBT header
++		 */
++		_vector->iov_base = (void *)state->hdr.nbt;
++		_vector->iov_len = NBT_HDR_SIZE;
++		*_count = 1;
++
++		state->hdr.done = true;
++		state->smb2_req->splice = false;
++		return 0;
++	}
++
++	/*
++	 * Now we analyze the NBT header
++	 */
++	pkt_length = smb2_len(state->hdr.nbt);
++
++	if (pkt_length == 0) {
++		/* if there're no remaining bytes, we're done */
++		*_count = 0;
++		return 0;
++	}
++
++
++/*
++ * 	We will perform the socket read in two steps.
++ *	We are trying to find out if the request is a write in order to use splice.
++ *	We won't splice if the write payload is bellow 2KiB so, if the packet is smaller we always read
++ *	the entire length in one go and never splice.
++ *	If the packet is bigger we do a first read of 0x70 bytes (since this is the size of the write request header)
++ *	and then check if it's a write. If yes, we trigger a splice for the rest of the payload, if not, we do an additional
++ *      read.
++ */
++	if (state->pktlen > 0) {
++		/*
++                 * There is more in the socket for that SMB2 transaction
++		 * 1/ Need to identify the command.
++		 * 2/ fetch the rest of the PDU
++		 */
++
++		/*
++		 * 1/ Identifying the command
++		 */
++
++		/* Sanity check */
++		/* This is taken from smbd_smb2_inbuf_parse_compound */
++		uint8_t *hdr = state->pktbuf;
++
++		start = state->pktbuf + state->pktlen;
++		length = pkt_length - state->pktlen;
++
++		state->pktlen = pkt_length;
++		state->data_done = true;
++
++		if ((IVAL(hdr, 0) == SMB2_MAGIC) && !IVAL(hdr, SMB2_HDR_NEXT_COMMAND)) {
++			uint16_t cmd;
++
++			cmd = SVAL(hdr, SMB2_HDR_OPCODE);
++
++			if (cmd == SMB2_OP_WRITE) {
++				state->smb2_req->splice = true;
++
++				*_count = 0;
++				return 0;
++			}
++		}
++	}
++	else
++	{
++		/* Allocated statically in the smbd_smb2_request structure, FIXME check if big enough */
++		state->pktbuf = &state->smb2_req->comcerto_pktbuf[0];
++
++		start = state->pktbuf;
++
++		/* Check if it's something we may splice */
++		if (pkt_length <= (2 * 1024)) {
++			/* If not, read the entire packet */
++			length = pkt_length;
++ 			state->data_done = true;
++		}
++		else {
++			length = 0x70;
++		}
++
++		state->pktlen = length;
++	}
++
++	_vector->iov_base = start;
++	_vector->iov_len = length;
++
++	*_count = 1;
++	return 0;
++}
++#else /* !defined(CONFIG_COMCERTO_SMB_SPLICE) */
++	/* FIXME */
++#endif /* !defined(CONFIG_COMCERTO_SMB_SPLICE) */
++
++#define offset_of(type, member) ((unsigned long)&(((type *)0)->member))
++#define container_of(entry, type, member) ((type *)((unsigned char *)(entry) - offset_of(type, member)))
++
++void comcerto_smbd_smb2_request_read_done(struct comcerto_tstream_readv_req *subreq)
++{
++	struct smbd_smb2_request_read_state *state = container_of(subreq, struct smbd_smb2_request_read_state, tstream_readv_req);
++	struct tevent_req *req = state->req;
++	int ret;
++	int sys_errno;
++	bool sync;
++	NTSTATUS status;
++	NTTIME now;
++
++	ret = comcerto_tstream_readv_pdu_recv(subreq, &sys_errno);
++	if (ret == -1) {
++		status = map_nt_error_from_unix(sys_errno);
++		tevent_req_nterror(req, status);
++		return;
++	}
++
++	state->smb2_req->request_time = timeval_current();
++	now = timeval_to_nttime(&state->smb2_req->request_time);
++
++	status = smbd_smb2_inbuf_parse_compound(state->smb2_req->sconn->conn,
++						now,
++						state->pktbuf,
++						state->pktlen,
++						state->smb2_req,
++						&state->smb2_req->in.vector,
++						&state->smb2_req->in.vector_count);
++	if (tevent_req_nterror(req, status)) {
++		return;
++	}
++
++	state->smb2_req->current_idx = 1;
++
++	sync = subreq->sync;
++
++	tevent_req_done(req);
++
++	/* If it's not a sync request the callback was already called above */
++	if (sync)
++		tevent_req_post(req, state->ev);
++}
++
++#else /* !CONFIG_COMCERTO_READV */
++
+ static int smbd_smb2_request_next_vector(struct tstream_context *stream,
+ 					 void *private_data,
+ 					 TALLOC_CTX *mem_ctx,
+@@ -2995,6 +3309,7 @@ static void smbd_smb2_request_read_done(struct tevent_req *subreq)
+ 
+ 	tevent_req_done(req);
+ }
++#endif /* !CONFIG_COMCERTO_READV */
+ 
+ static NTSTATUS smbd_smb2_request_read_recv(struct tevent_req *req,
+ 					    TALLOC_CTX *mem_ctx,
+@@ -3031,6 +3346,10 @@ static NTSTATUS smbd_smb2_request_next_incoming(struct smbd_server_connection *s
+ 		return NT_STATUS_OK;
+ 	}
+ 
++#ifdef CONFIG_COMCERTO_READV
++	if (sconn->smb2.recv_pending)
++		return NT_STATUS_OK;
++#else
+ 	if (tevent_queue_length(sconn->smb2.recv_queue) > 0) {
+ 		/*
+ 		 * if there is already a smbd_smb2_request_read
+@@ -3038,6 +3357,7 @@ static NTSTATUS smbd_smb2_request_next_incoming(struct smbd_server_connection *s
+ 		 */
+ 		return NT_STATUS_OK;
+ 	}
++#endif
+ 
+ 	max_send_queue_len = MAX(1, sconn->smb2.max_credits/16);
+ 	cur_send_queue_len = tevent_queue_length(sconn->smb2.send_queue);
+@@ -3052,7 +3372,11 @@ static NTSTATUS smbd_smb2_request_next_incoming(struct smbd_server_connection *s
+ 	}
+ 
+ 	/* ask for the next request */
++#ifdef CONFIG_COMCERTO_READV
++	subreq = comcerto_smbd_smb2_request_read_send(sconn, sconn->ev_ctx, sconn);
++#else
+ 	subreq = smbd_smb2_request_read_send(sconn, sconn->ev_ctx, sconn);
++#endif
+ 	if (subreq == NULL) {
+ 		return NT_STATUS_NO_MEMORY;
+ 	}
+@@ -3117,6 +3441,9 @@ static void smbd_smb2_request_incoming(struct tevent_req *subreq)
+ 	struct smbd_smb2_request *req = NULL;
+ 
+ 	status = smbd_smb2_request_read_recv(subreq, sconn, &req);
++#ifdef CONFIG_COMCERTO_READV
++	sconn->smb2.recv_pending = false;
++#endif
+ 	TALLOC_FREE(subreq);
+ 	if (!NT_STATUS_IS_OK(status)) {
+ 		DEBUG(2,("smbd_smb2_request_incoming: client read error %s\n",
+diff --git a/source3/smbd/smb2_write.c b/source3/smbd/smb2_write.c
+index f9cfbfc..730cd7c 100644
+--- a/source3/smbd/smb2_write.c
++++ b/source3/smbd/smb2_write.c
+@@ -78,7 +78,11 @@ NTSTATUS smbd_smb2_request_process_write(struct smbd_smb2_request *req)
+ 			__location__, in_data_length, req->sconn->smb2.max_write));
+ 		return smbd_smb2_request_error(req, NT_STATUS_INVALID_PARAMETER);
+ 	}
+-
++#if defined (CONFIG_COMCERTO_SMB_SPLICE)
++	// MINDSPEED
++	// Splice will not use the pointer but the data length is valid
++	// could give pipe instead ?? req->sconn->fdpipe[0]
++#endif
+ 	in_data_buffer.data = SMBD_SMB2_IN_DYN_PTR(req);
+ 	in_data_buffer.length = in_data_length;
+ 
+@@ -303,7 +307,10 @@ static struct tevent_req *smbd_smb2_write_send(TALLOC_CTX *mem_ctx,
+ 		tevent_req_nterror(req, NT_STATUS_ACCESS_DENIED);
+ 		return tevent_req_post(req, ev);
+ 	}
+-
++#if defined (CONFIG_COMCERTO_SMB_SPLICE)
++	if (smb2req->splice == true)
++		goto splice;
++#endif
+ 	/* Try and do an asynchronous write. */
+ 	status = schedule_aio_smb2_write(conn,
+ 					smbreq,
+@@ -326,7 +333,9 @@ static struct tevent_req *smbd_smb2_write_send(TALLOC_CTX *mem_ctx,
+ 		tevent_req_nterror(req, status);
+ 		return tevent_req_post(req, ev);
+ 	}
+-
++#if defined (CONFIG_COMCERTO_SMB_SPLICE)
++splice:
++#endif
+ 	/* Fallback to synchronous. */
+ 	init_strict_lock_struct(fsp,
+ 				fsp->op->global->open_persistent_id,
+@@ -339,7 +348,12 @@ static struct tevent_req *smbd_smb2_write_send(TALLOC_CTX *mem_ctx,
+ 		tevent_req_nterror(req, NT_STATUS_FILE_LOCK_CONFLICT);
+ 		return tevent_req_post(req, ev);
+ 	}
+-
++#if defined (CONFIG_COMCERTO_SMB_SPLICE)
++	if (smb2req->splice == true) {
++		struct smbd_server_connection *sconn = smb2req->sconn;
++		nwritten = SMB_VFS_RECVFILE(sconn->sock, fsp, in_offset, in_data.length);
++	} else
++#endif
+ 	nwritten = write_file(smbreq, fsp,
+ 			      (const char *)in_data.data,
+ 			      in_offset,
+diff --git a/source3/utils/owrt_smbpasswd.c b/source3/utils/owrt_smbpasswd.c
+index 863828a..d75af9f 100644
+--- a/source3/utils/owrt_smbpasswd.c
++++ b/source3/utils/owrt_smbpasswd.c
+@@ -144,7 +144,7 @@ static void smbpasswd_delete_user(FILE *fp)
+ static int usage(const char *progname)
+ {
+ 	fprintf(stderr,
+-		"Usage: %s [options] <username>\n"
++		"Usage: %s [options] <username> [password]\n"
+ 		"\n"
+ 		"Options:\n"
+ 		"  -s		read password from stdin\n"
+@@ -157,10 +157,10 @@ static int usage(const char *progname)
+ int main(int argc, char **argv)
+ {
+ 	const char *prog = argv[0];
+-	const char *user;
+-	char *pw1, *pw2;
++	const char *user, *password;
++	char *pw1 = 0, *pw2 = 0;
+ 	FILE *fp;
+-	bool add = false, delete = false, get_stdin = false, found;
++	bool add = false, delete = false, get_stdin = false, found, passwd_cmdline = false;
+ 	int ch;
+ 	int uid;
+ 
+@@ -171,9 +171,11 @@ int main(int argc, char **argv)
+ 		case 's':
+ 			get_stdin = true;
+ 			break;
++
+ 		case 'a':
+ 			add = true;
+ 			break;
++
+ 		case 'x':
+ 			delete = true;
+ 			break;
+@@ -191,6 +193,9 @@ int main(int argc, char **argv)
+ 	if (!argc)
+ 		return usage(prog);
+ 
++	if (argc == 2)
++		passwd_cmdline = true;
++
+ 	user = argv[0];
+ 	if (!delete) {
+ 		uid = find_uid_for_user(user);
+@@ -207,36 +212,44 @@ int main(int argc, char **argv)
+ 	}
+ 
+ 	found = find_passwd_line(fp, user, NULL);
++#if 0
+ 	if (!add && !found) {
+ 		fprintf(stderr, "Could not find user '%s' in /etc/samba/smbpasswd\n", user);
+ 		return 3;
+ 	}
++#endif
+ 
+ 	if (delete) {
+ 		smbpasswd_delete_user(fp);
+ 		goto out;
+ 	}
+ 
+-	pw1 = get_pass("New SMB password:", get_stdin);
+-	if (!pw1)
+-		pw1 = strdup("");
++	if (passwd_cmdline == false) {
++		pw1 = get_pass("New SMB password:", get_stdin);
++		if (!pw1)
++			pw1 = strdup("");
+ 
+-	pw2 = get_pass("Retype SMB password:", get_stdin);
+-	if (!pw2)
+-		pw2 = strdup("");
++		password = pw2 = get_pass("Retype SMB password:", get_stdin);
++		if (!pw2)
++			pw2 = strdup("");
+ 
+-	if (strcmp(pw1, pw2) != 0) {
+-		fprintf(stderr, "Mismatch - password unchanged.\n");
+-		goto out_free;
++		if (strcmp(pw1, pw2) != 0) {
++			fprintf(stderr, "Mismatch - password unchanged.\n");
++			goto out_free;
++		}
++	} else {
++		password = argv[1];
+ 	}
+ 
+ 	if (found)
+ 		fseek(fp, -strlen(buf), SEEK_CUR);
+-	smbpasswd_write_user(fp, user, uid, pw2);
++	smbpasswd_write_user(fp, user, uid, password);
+ 
+ out_free:
+-	free(pw1);
+-	free(pw2);
++	if (pw1)
++		free(pw1);
++	if (pw2)
++		free(pw2);
+ out:
+ 	fclose(fp);
+ 	TALLOC_FREE(frame);

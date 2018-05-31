@@ -1,0 +1,12 @@
+SOURCE:https://github.com/openwrt-es/openwrt-routing/tree/master/mrd6
+
+commit 857c9e09ff2ae7cbe51c7bd589840969ee5b5537
+Author: Markus Stenberg <markus.stenberg@iki.fi>
+Date:   Wed Apr 23 16:08:26 2014 +0300
+
+Changes 
+
+mrd6.init
+mrd6.conf 
+
+Both Files Changes are pending as the init sciprt structure in CC and BB is different from AA

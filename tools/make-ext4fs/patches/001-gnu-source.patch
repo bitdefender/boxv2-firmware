@@ -1,0 +1,11 @@
+Index: make-ext4fs-2015-05-01/Makefile
+===================================================================
+--- make-ext4fs-2015-05-01.orig/Makefile
++++ make-ext4fs-2015-05-01/Makefile
+@@ -1,5 +1,5 @@
+ CC ?= gcc
+-CFLAGS += -Iinclude -Ilibsparse/include
++CFLAGS += -Iinclude -Ilibsparse/include -D_GNU_SOURCE
+ 
+ OBJ := \
+     allocate.o \

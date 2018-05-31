@@ -1,0 +1,12 @@
+diff -Naur libnetfilter_conntrack-1.0.4/src/main.c libnetfilter_conntrack-1.0.4-Modified/src/main.c
+--- libnetfilter_conntrack-1.0.4/src/main.c	2011-12-30 05:12:58.000000000 +0530
++++ libnetfilter_conntrack-1.0.4-Modified/src/main.c	2015-05-29 17:32:43.257644000 +0530
+@@ -89,6 +89,8 @@
+ 	if (!nfnlh)
+ 		return NULL;
+ 
++	nfnl_rcvbufsiz(nfnlh, 10000000);
++
+ 	nfcth = nfct_open_nfnl(nfnlh, subsys_id, subscriptions);
+ 	if (!nfcth)
+ 		nfnl_close(nfnlh);

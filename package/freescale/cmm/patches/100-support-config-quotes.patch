@@ -1,0 +1,72 @@
+--- a/src/ffcontrol.c	2017-09-21 15:56:04.300756363 +0300
++++ a/src/ffcontrol.c	2017-09-21 15:57:00.212215917 +0300
+@@ -1706,6 +1706,20 @@
+ 
+ 	while (fgets(buf, sizeof(buf), fp))
+ 	{
++		char *f_quote = strchr(buf, '\'');
++		char *l_quote = strrchr(buf, '\'');
++
++		if (f_quote && f_quote != l_quote) {
++			char *p = l_quote+1;
++
++			while (*p && isspace(*p)) p++;
++			
++			if (!*p) {
++				*f_quote = 0;
++				*l_quote = 0;
++			}
++		}
++
+ 		argc = 0;
+ 		argv[argc] = strtok(buf, " \t\n");
+ 
+@@ -1717,6 +1731,9 @@
+ 			argv[argc] = strtok(NULL, " \t\n");
+ 		}
+ 
++		if (f_quote && argc < ARGC_MAX)
++			argv[argc++] = f_quote+1;
++
+ 		if (argc < 1)
+ 			continue;
+ 
+--- a/src/ffcontrol.c
++++ a/src/ffcontrol.c
+@@ -1093,19 +1093,32 @@ static int section_fastforward_option_hd
+ 	}
+ 	else if (!strcmp(option, "mark"))
+ 	{
+-		if (argc < 3)
++		char *vals[3] = {
++			value,
++			argc >= 3 ? argv[2] : NULL,
++			argc >= 4 ? argv[3] : NULL
++		};
++
++		if (argc < 2)
+ 			goto err;
+ 
+ 		attrType = ATTR_MARK;
+-		attrValue = atoi(value);
++
++		if (argc == 2) {
++			vals[0] = strtok(value, " ");
++			vals[1] = strtok(NULL, " ");
++			vals[2] = strtok(NULL, " ");
++		}
++
++		attrValue = atoi(vals[0]);
+ 		attrWidth = sizeof(unsigned int);
+ 
+-		if (!strcmp(argv[2], "mask"))
++		if (vals[1] && !strcmp(vals[2], "mask"))
+ 		{
+ 			if (argc < 4)
+ 				goto err;
+ 
+-			mask = atoi(argv[3]);
++			mask = atoi(vals[2]);
+ 		}
+ 		else
+ 		{

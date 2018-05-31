@@ -1,0 +1,40 @@
+
+
+config "asterisk" "general"
+	option board_name 	''
+	option analogphones	'0'
+	option voipphones	'1'
+	option vm		'yes'
+	option vm_main		'1234'
+
+config "analogphone" "analog1"
+	option name	'pots1'
+	option number	'101'
+	option voicemail	'enable'
+
+config "analogphone" "analog2"
+	option name	'pots2'
+	option number	'102'
+	option voicemail	'enable'
+
+config "analogphone" "analog3"
+	option name	'pots3'
+	option number	'103'
+	option voicemail	'enable'
+
+config "analogphone" "analog4"
+	option name	'pots4'
+	option number	'104'
+	option voicemail	'enable'
+
+config "analogphone" "fxo"
+	option name	'FXO'
+	option number	'301'
+
+config "voipphone" "voip1"
+        option name     'voip1'
+        option number   '201'
+        option protocol 'sip'
+        option authname '201'
+        option authpwd  '201'
+        option voicemail        'enable'

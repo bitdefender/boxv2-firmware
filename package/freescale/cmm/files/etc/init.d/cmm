@@ -1,0 +1,53 @@
+#!/bin/sh /etc/rc.common
+
+START=54
+
+CONF=/etc/config/fastforward
+OPTIONS="-f $CONF"
+
+start() {
+        if [ -e /proc/fppmode ]; then
+	  if [ "`grep "0" /proc/fppmode`" ]; then
+            exit 0
+          fi
+        fi
+	insmod nfnetlink 2> /dev/null
+if [ "`uname -r`" \> "2.6.32" ]; then
+	insmod nf_defrag_ipv4 2> /dev/null
+fi
+	insmod nf_conntrack 2> /dev/null
+	insmod nf_conntrack_ipv4 2> /dev/null
+	insmod nf_conntrack_ipv6 2> /dev/null
+	insmod nf_nat  2> /dev/null
+	insmod nf_conntrack_netlink  2> /dev/null
+
+	[ -d /var/run ] || mkdir -p /var/run
+	board_name=$(cat /proc/cpuinfo | grep "Comcerto" | cut -d'(' -f 2 | cut -d' ' -f 1)
+#	echo "board_name=$board_name"
+	if [ "$board_name" = "Router" ]; then
+	  nf_conntrack_max=$(cat /etc/sysctl.conf | grep "nf_conntrack_max" | cut -d'=' -f 2)
+	  if [ -n "$nf_conntrack_max" -a "$nf_conntrack_max" -gt 0 ]; then
+	    OPTIONS="$OPTIONS -n"
+	    OPTIONS="$OPTIONS $nf_conntrack_max"
+	  fi
+	fi
+#	echo "cmm OPTIONS is $OPTIONS"
+        /usr/bin/cmm $OPTIONS
+
+	[ -e /etc/init.d/qos ] && sleep 1 && /etc/init.d/qos restart
+}
+
+stop() {
+        if [ -e /proc/fppmode ]; then
+	  if [ "`grep "0" /proc/fppmode`" ]; then
+            exit 0
+          fi
+        fi
+        [ -f /var/run/cmm.pid ] && kill $(cat /var/run/cmm.pid) >/dev/null 2>&1
+	rmmod nf_conntrack_netlink 2> /dev/null
+	rmmod nf_nat 2> /dev/null
+	rmmod nf_conntrack_ipv6 2> /dev/null
+	rmmod nf_conntrack_ipv4 2> /dev/null
+	rmmod nfnetlink 2> /dev/null
+}
+

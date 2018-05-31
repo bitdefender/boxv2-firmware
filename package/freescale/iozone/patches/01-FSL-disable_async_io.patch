@@ -1,0 +1,36 @@
+diff -Naur -x CVS iozone3_405/src/current/libasync.c iozone3_405_mod/src/current/libasync.c
+--- iozone3_405/src/current/libasync.c	2012-04-20 19:47:02.000000000 +0530
++++ iozone3_405_mod/src/current/libasync.c	2013-01-23 16:18:26.000000000 +0530
+@@ -94,6 +94,7 @@
+  *	path as it must perform meta-data allocations and wait.
+  */
+ 
++#ifdef ASYNC_IO
+ #include <sys/types.h>
+ #include <aio.h>
+ #if defined(solaris) || defined(linux) || defined(SCO_Unixware_gcc)
+@@ -1602,3 +1603,4 @@
+ 	for(i=0;i<len;i++)
+ 		*dest++=*source++;
+ }
++#endif /* endif for ifdef ASYNC_IO */
+diff -Naur -x CVS iozone3_405/src/current/makefile iozone3_405_mod/src/current/makefile
+--- iozone3_405/src/current/makefile	2012-04-20 19:47:02.000000000 +0530
++++ iozone3_405_mod/src/current/makefile	2013-01-23 16:17:03.000000000 +0530
+@@ -977,13 +977,13 @@
+ 	@echo ""
+ 	@echo "Building iozone for Linux-arm"
+ 	@echo ""
+-	$(CC) -c -O3 -Dunix -DHAVE_ANSIC_C -DASYNC_IO -DHAVE_PREAD \
++	$(CC) -c -O3 -Dunix -DHAVE_ANSIC_C -DHAVE_PREAD \
+ 		-DNAME='"linux-arm"' -DLINUX_ARM -DSHARED_MEM \
+ 		-Dlinux -D_LARGEFILE64_SOURCE $(CFLAGS) iozone.c \
+ 		-o iozone_linux-arm.o
+-	$(CC) -c -O3 -Dunix -DHAVE_ANSIC_C -DASYNC_IO -D_LARGEFILE64_SOURCE \
++	$(CC) -c -O3 -Dunix -DHAVE_ANSIC_C -D_LARGEFILE64_SOURCE \
+ 		-DSHARED_MEM -Dlinux $(CFLAGS) libbif.c -o libbif.o
+-	$(CC) -c -O3 -Dunix -Dlinux -DHAVE_ANSIC_C -DASYNC_IO \
++	$(CC) -c -O3 -Dunix -Dlinux -DHAVE_ANSIC_C \
+ 		-D_LARGEFILE64_SOURCE $(CFLAGS) libasync.c  -o libasync.o
+ 
+ iozone_linux-AMD64.o:	iozone.c libbif.c libasync.c 

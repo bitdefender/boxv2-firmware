@@ -1,0 +1,261 @@
+diff -u a/file.c b/file.c
+--- a/file.c	2011-10-07 00:52:05.000000000 +0530
++++ b/file.c	2013-09-18 14:40:27.001358000 +0530
+@@ -1224,6 +1224,31 @@
+     }
+ }
+
++#ifdef MSPD_L2TP_OFFLOAD
++int set_mark (char *word, char *value, int context, void *item)
++{
++
++#ifdef DEBUG_FILE
++        l2tp_log (LOG_DEBUG, "set_mark: Setting mark value to %s\n",
++             value);
++#endif
++
++    switch (context & ~CONTEXT_DEFAULT)
++    {
++    case CONTEXT_LAC:
++        return set_int (word, value, &(((struct lac *) item)->mark));
++    case CONTEXT_LNS:
++        return set_int (word, value, &(((struct lns *) item)->mark));
++    default:
++        snprintf (filerr, sizeof (filerr), "'%s' not valid in this context\n",
++                  word);
++        return -1;
++    }
++    return 0;
++}
++#endif
++
++
+ int parse_config (FILE * f)
+ {
+     /* Read in the configuration file handed to us */
+@@ -1502,5 +1527,8 @@
+     {"tx bps", &set_speed},
+     {"rx bps", &set_speed},
+     {"bps", &set_speed},
++#ifdef MSPD_L2TP_OFFLOAD
++    {"mark", &set_mark},
++#endif
+     {NULL, NULL}
+ };
+diff -u a/file.h b/file.h
+--- a/file.h	2011-10-07 00:52:05.000000000 +0530
++++ b/file.h	2013-09-18 14:40:27.001332000 +0530
+@@ -58,6 +58,7 @@
+ #define ALT_DEFAULT_AUTH_FILE "/etc/l2tpd/l2tp-secrets"
+ #define ALT_DEFAULT_CONFIG_FILE "/etc/l2tp/l2tpd.conf"
+ #define DEFAULT_PID_FILE "/var/run/xl2tpd.pid"
++#define	MSPD_L2TP_OFFLOAD
+
+ /* Definition of an LNS */
+ struct lns
+@@ -97,6 +98,9 @@
+     int debug;                  /* Debug PPP? */
+     char pppoptfile[STRLEN];    /* File containing PPP options */
+     struct tunnel *t;           /* Tunnel of this, if it's ready */
++#ifdef MSPD_L2TP_OFFLOAD
++    int mark;			/* Mark value used for this LNS */
++#endif
+ };
+
+ struct lac
+@@ -136,6 +140,9 @@
+     int debug;
+     struct tunnel *t;           /* Our tunnel */
+     struct call *c;             /* Our call */
++#ifdef MSPD_L2TP_OFFLOAD
++    int mark;			/* Mark value used for this LNS */
++#endif
+ };
+
+ struct global
+diff -u a/xl2tpd.c b/xl2tpd.c
+--- a/xl2tpd.c	2013-09-19 16:11:44.002183000 +0530
++++ b/xl2tpd.c	2013-09-20 10:48:44.000038000 +0530
+@@ -52,6 +52,13 @@
+ #include <arpa/inet.h>
+ #include "l2tp.h"
+
++#ifdef MSPD_L2TP_OFFLOAD
++#include <dirent.h>
++#include <glob.h>
++#include <libcmm.h>
++#include <cmmd.h>
++#endif
++
+ struct tunnel_list tunnels;
+ int rand_source;
+ int ppd = 1;                    /* Packet processing delay */
+@@ -69,6 +76,148 @@
+ volatile sig_atomic_t sigusr1_received;;
+ volatile sig_atomic_t sighup_received;
+
++#ifdef MSPD_L2TP_OFFLOAD
++extern struct sockaddr_in server;
++#define PPP_GLOB "/var/run/ppp*"
++#define DELIMS "/."
++int mspd_cmm_notify(struct call *call, char *itf_name)
++{
++	cmm_command_t cmd;
++	cmm_response_t res;
++	cmm_handle_t *handle;
++	cmmd_l2tp_session_t *l2tp_cmd;
++	int rcv_len;
++	int rc = 0;
++	unsigned short options = 0;
++	struct sockaddr_in localAddress;
++	socklen_t addressLength = sizeof(localAddress);
++
++	if (call->lbit)
++		options |= CMMD_L2TP_OPT_LENGTH;
++
++	if (call->seq_reqd)
++		options |= CMMD_L2TP_OPT_SEQ;
++
++	memset(&cmd, 0 , sizeof(cmd));
++	memset(&res, 0 , sizeof(res));
++
++	if (!(handle = cmm_open())) {
++		l2tp_log(LOG_ERR, "Cannot open CMM handle");
++		return -1;
++	}
++
++	cmd.func = CMMD_CMD_L2TP_SESSION;
++	cmd.length = sizeof(cmmd_l2tp_session_t);
++	l2tp_cmd = (cmmd_l2tp_session_t*)&cmd.buf;
++
++	if(getsockname(call->container->udp_fd, (struct sockaddr*)&localAddress, &addressLength) < 0)
++	{
++		l2tp_log(LOG_ERR, "Error from getsockname, error = `%s'\n", strerror(errno));
++		rc = -1;
++		goto out;
++	}
++	strcpy(l2tp_cmd->itf_name, itf_name);
++	l2tp_cmd->family = localAddress.sin_family;
++	l2tp_cmd->local_addr[0] = localAddress.sin_addr.s_addr;
++	l2tp_cmd->peer_addr[0] = call->container->peer.sin_addr.s_addr;
++	l2tp_cmd->local_port = localAddress.sin_port;
++	l2tp_cmd->peer_port = call->container->peer.sin_port;
++	l2tp_cmd->local_tun_id = htons(call->container->ourtid);
++	l2tp_cmd->peer_tun_id = htons(call->container->tid);
++	l2tp_cmd->local_ses_id = htons(call->ourcid);
++	l2tp_cmd->peer_ses_id = htons(call->cid);
++	l2tp_cmd->options = 0;
++	if(call->lns)
++		l2tp_cmd->fwmark = call->lns->mark;
++	else if(call->lac)
++		l2tp_cmd->fwmark = call->lac->mark;
++
++	if (cmm_send(handle, &cmd, 0) != 0) {
++		l2tp_log(LOG_ERR, "Error sending message to CMM, error = `%s'\n", strerror(errno));
++		rc = -1;
++		goto out;
++	}
++
++	if ((rcv_len = cmm_recv(handle, &res, 0)) < 0) {
++		l2tp_log(LOG_ERR, "Error receiving message from CMM, error = `%s'\n", strerror(errno));
++		rc = -1;
++		goto out;
++	}
++	if (res.rc == FPP_ERR_OK) {
++		//TODO add offload status to call and avoids resending info when new itf comes up
++		l2tp_log(LOG_DEBUG, "Successfully offloaded tunnel\n");
++		l2tp_log(LOG_DEBUG, "Local IP %s\n", IPADDY(localAddress.sin_addr));
++		l2tp_log(LOG_DEBUG, "Remote IP %s\n", IPADDY(call->container->peer.sin_addr));
++		l2tp_log(LOG_DEBUG, "Local tunnel(%d) session(%d)\n", call->container->ourtid, call->ourcid);
++		l2tp_log(LOG_DEBUG, "Remote tunnel(%d) session(%d)\n", call->container->tid, call->cid);
++		l2tp_log(LOG_DEBUG, "fwmark (%d)\n", l2tp_cmd->fwmark);
++	}
++	else {
++		l2tp_log(LOG_ERR, "Error from CMM, error = `%d'\n", res.rc);
++		rc = -1;
++	}
++out:
++	cmm_close(handle);
++	return rc;
++}
++
++/*
++ * This function checks if L2TP application
++ * is effectively the spawner of one of
++ * the PPP interface
++ *
++ */
++void mspd_ppp_up(int pid, char *itf_name)
++{
++	struct tunnel *tun;
++	struct call *call;
++
++	tun = tunnels.head;
++
++	while (tun) {
++		call = tun->call_head;
++
++		while (call) {
++			if (call->pppd == pid) {
++				mspd_cmm_notify(call, itf_name);
++				return;
++			}
++			call = call->next;
++		}
++		tun = tun->next;
++	}
++}
++//TODO add synchronous signal handling
++void mspd_sig_handler()
++{
++	glob_t globbuf;
++	int i;
++	char *token;
++
++	glob(PPP_GLOB, 0, NULL, &globbuf);
++
++	for (i = 0; i < globbuf.gl_pathc; i ++) {
++		FILE *fd;
++		char buf[10];
++		char buf_path[32];
++		int pid;
++
++		fd = fopen(globbuf.gl_pathv[i], "r");
++		if (fd > 0) {
++			fgets(buf, 10, fd);
++			fclose(fd);
++			pid = atoi(buf);
++
++			strcpy(buf_path, globbuf.gl_pathv[i]);
++			token = strtok(buf_path, DELIMS);
++			token = strtok(NULL, DELIMS);
++			token = strtok(NULL, DELIMS);
++			l2tp_log (LOG_INFO, "Found ppp interface (%s) with pppd PID %d\n", token, pid);
++			mspd_ppp_up(pid, token);
++		}
++	}
++}
++#endif
+ void init_tunnel_list (struct tunnel_list *t)
+ {
+     t->head = NULL;
+@@ -1531,6 +1680,9 @@
+     signal (SIGCHLD, &sigchld_handler);
+     signal (SIGUSR1, &sigusr1_handler);
+     signal (SIGHUP, &sighup_handler);
++#ifdef MSPD_L2TP_OFFLOAD
++	signal (SIGUSR2, &mspd_sig_handler);
++#endif
+     init_scheduler ();
+
+     unlink(gconfig.controlfile);
+@@ -1549,6 +1701,9 @@
+     l2tp_log (LOG_INFO, "Listening on IP address %s, port %d\n",
+               inet_ntoa(listenaddr), gconfig.port);
+     lac = laclist;
++#ifdef MSPD_L2TP_OFFLOAD
++	l2tp_log (LOG_INFO, "Mindspeed L2TP offload (C) 2013\n");
++#endif
+     while (lac)
+     {
+         if (lac->autodial)

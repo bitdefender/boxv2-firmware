@@ -1,0 +1,29 @@
+#!/bin/sh /etc/rc.common
+# Copyright (C) 2013 Mindspeed Technologies
+
+START=89
+
+NVRAM_FILE=/usr/share/dspg/nvram.bin
+
+start() {
+    echo "Configuring registers: activation CSS mode"
+    mmiotool -w 0x90470044 0x00303000
+
+    if [ -e  $NVRAM_FILE ]; then
+		echo "Using existing nvram.bin file"
+	else
+		echo "Creating new nvram.bin file"
+		dd if=/dev/zero of=$NVRAM_FILE bs=10622 count=1
+	fi
+
+	insmod dspg_dect
+
+	if [ -n "`cat /proc/cpuinfo | grep 'Comcerto 2000 ASIC'`" ]; then
+		echo 1 > /sys/bus/platform/drivers/css/css.0/load_pmu_fw
+		echo "PMU loaded"
+	fi
+}
+
+stop(){
+	rmmod dspg_dect
+}

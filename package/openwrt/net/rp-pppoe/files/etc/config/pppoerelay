@@ -1,0 +1,4 @@
+config pppoerelay general
+	option enable "0"
+	option max_sessions	'16'
+

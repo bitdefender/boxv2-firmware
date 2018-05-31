@@ -1,0 +1,495 @@
+From 109e51e31f7d766011afa426fce6505be1fc96d5 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Gabriel=20Iva=C8=99cu?= <givascu@bitdefender.com>
+Date: Wed, 14 Mar 2018 15:30:26 +0200
+Subject: [PATCH] Add option to execute custom script at port mapping request
+
+---
+ miniupnpd.c      |  3 +++
+ natpmp.c         | 31 +++++++++++++++++++++++++++++++
+ options.c        |  3 ++-
+ options.h        |  3 ++-
+ pcpserver.c      | 38 ++++++++++++++++++++++++++++++++++++--
+ upnpglobalvars.c |  2 ++
+ upnpglobalvars.h |  2 ++
+ upnpredirect.c   | 47 +++++++++++++++++++++++++++++++++++++++++++++++
+ upnpredirect.h   |  5 +++++
+ upnpsoap.c       | 56 +++++++++++++++++++++++++++++++++++++++++++-------------
+ 10 files changed, 173 insertions(+), 17 deletions(-)
+
+diff --git a/miniupnpd.c b/miniupnpd.c
+index dace338..76c8906 100644
+--- a/miniupnpd.c
++++ b/miniupnpd.c
+@@ -1285,6 +1285,9 @@ init(int argc, char * * argv, struct runtime_vars * v)
+ 				if(strcmp(ary_options[i].value, "yes") == 0)
+ 					SETFLAG(SECUREMODEMASK);
+ 				break;
++			case UPNPRRSCRIPT:
++				miniupnpd_rrscript = ary_options[i].value;
++				break;
+ #ifdef ENABLE_LEASEFILE
+ 			case UPNPLEASEFILE:
+ 				lease_file = ary_options[i].value;
+diff --git a/natpmp.c b/natpmp.c
+index 824faf9..03b715d 100644
+--- a/natpmp.c
++++ b/natpmp.c
+@@ -267,11 +267,13 @@ void ProcessIncomingNATPMPPacket(int s, unsigned char *msg_buff, int len,
+ 			char iaddr_old[16];
+ 			unsigned short iport_old;
+ 			unsigned int timestamp;
++			const char *protocol;
+ 
+ 			iport = READNU16(req+4);
+ 			eport = READNU16(req+6);
+ 			lifetime = READNU32(req+8);
+ 			proto = (req[1]==1)?IPPROTO_UDP:IPPROTO_TCP;
++			protocol = proto == IPPROTO_TCP ? "TCP" : "UDP";
+ 			syslog(LOG_INFO, "NAT-PMP port mapping request : "
+ 			                 "%hu->%s:%hu %s lifetime=%us",
+ 			                 eport, senderaddrstr, iport,
+@@ -309,6 +311,10 @@ void ProcessIncomingNATPMPPacket(int s, unsigned char *msg_buff, int len,
+ 								syslog(LOG_ERR, "Failed to remove NAT-PMP mapping eport %hu, protocol %s",
+ 								       eport2, (proto2==IPPROTO_TCP)?"TCP":"UDP");
+ 								resp[3] = 2;	/* Not Authorized/Refused */
++								upnp_invoke_rrscript(NULL, eport,
++									senderaddrstr, iport,
++									protocol, "UPnP-NATPMP",
++									1, "Internal error");
+ 								break;
+ 							} else {
+ 								syslog(LOG_INFO, "NAT-PMP %s port %hu mapping removed",
+@@ -321,6 +327,10 @@ void ProcessIncomingNATPMPPacket(int s, unsigned char *msg_buff, int len,
+ 				}
+ 			} else if(iport==0) {
+ 				resp[3] = 2;	/* Not Authorized/Refused */
++				upnp_invoke_rrscript(NULL, eport,
++					senderaddrstr, iport,
++					protocol, "UPnP-NATPMP",
++					1, "Invalid port");
+ 			} else { /* iport > 0 && lifetime > 0 */
+ 				unsigned short eport_first = 0;
+ 				int any_eport_allowed = 0;
+@@ -335,10 +345,18 @@ void ProcessIncomingNATPMPPacket(int s, unsigned char *msg_buff, int len,
+ 							syslog(LOG_ERR, "No allowed eport for NAT-PMP %hu %s->%s:%hu",
+ 							       eport, (proto==IPPROTO_TCP)?"tcp":"udp", senderaddrstr, iport);
+ 							resp[3] = 2;	/* Not Authorized/Refused */
++							upnp_invoke_rrscript(NULL, eport,
++								senderaddrstr, iport,
++								protocol, "UPnP-NATPMP",
++								1, "External port unallowed");
+ 						} else { /* at least one eport allowed (but none available) */
+ 							syslog(LOG_ERR, "Failed to find available eport for NAT-PMP %hu %s->%s:%hu",
+ 							       eport, (proto==IPPROTO_TCP)?"tcp":"udp", senderaddrstr, iport);
+ 							resp[3] = 4;	/* Out of resources */
++							upnp_invoke_rrscript(NULL, eport,
++								senderaddrstr, iport,
++								protocol, "UPnP-NATPMP",
++								1, "Port unavailable");
+ 						}
+ 						break;
+ 					}
+@@ -370,6 +388,10 @@ void ProcessIncomingNATPMPPacket(int s, unsigned char *msg_buff, int len,
+ 							/* remove and then add again */
+ 							if(_upnp_delete_redir(eport, proto) < 0) {
+ 								syslog(LOG_ERR, "failed to remove port mapping");
++								upnp_invoke_rrscript(NULL, eport,
++									senderaddrstr, iport,
++									protocol, "UPnP-NATPMP",
++									1, "Internal error");
+ 								break;
+ 							}
+ 						} else {
+@@ -395,6 +417,15 @@ void ProcessIncomingNATPMPPacket(int s, unsigned char *msg_buff, int len,
+ 						syslog(LOG_ERR, "Failed to add NAT-PMP %hu %s->%s:%hu '%s'",
+ 						       eport, (proto==IPPROTO_TCP)?"tcp":"udp", senderaddrstr, iport, desc);
+ 						resp[3] = 3;  /* Failure */
++						upnp_invoke_rrscript(NULL, eport,
++							senderaddrstr, iport,
++							protocol, "UPnP-NATPMP",
++							1, "Internal error");
++					} else {
++						upnp_invoke_rrscript(NULL, eport,
++							senderaddrstr, iport,
++							protocol, "UPnP-NATPMP",
++							0, NULL);
+ 					}
+ 					break;
+ 				}
+diff --git a/options.c b/options.c
+index ac48788..6f9abc9 100644
+--- a/options.c
++++ b/options.c
+@@ -84,7 +84,8 @@ static const struct {
+ 	{ UPNPLEASEFILE, "lease_file"},
+ #endif
+ 	{ UPNPMINISSDPDSOCKET, "minissdpdsocket"},
+-	{ UPNPSECUREMODE, "secure_mode"}
++	{ UPNPSECUREMODE, "secure_mode"},
++	{ UPNPRRSCRIPT, "upnp_rrscript" }
+ };
+ 
+ int
+diff --git a/options.h b/options.h
+index fe6fc63..ff6a236 100644
+--- a/options.h
++++ b/options.h
+@@ -66,7 +66,8 @@ enum upnpconfigoptions {
+ 	UPNPLEASEFILE,			/* lease_file */
+ #endif
+ 	UPNPMINISSDPDSOCKET,	/* minissdpdsocket */
+-	UPNPENABLE				/* enable_upnp */
++	UPNPENABLE,				/* enable_upnp */
++	UPNPRRSCRIPT		/* upnp_rrscript */
+ };
+ 
+ /* readoptionsfile()
+diff --git a/pcpserver.c b/pcpserver.c
+index b216277..b9c8a3c 100644
+--- a/pcpserver.c
++++ b/pcpserver.c
+@@ -681,6 +681,7 @@ static int CreatePCPPeer_NAT(pcp_info_t *pcp_msg_info)
+ 	struct sockaddr_storage ret_extip;
+ 
+ 	uint8_t  proto = pcp_msg_info->protocol;
++	const char *protocol = (pcp_msg_info->protocol == IPPROTO_TCP) ? "TCP" : "UDP";
+ 
+ 	uint16_t eport = pcp_msg_info->ext_port;  /* public port */
+ 
+@@ -711,6 +712,9 @@ static int CreatePCPPeer_NAT(pcp_info_t *pcp_msg_info)
+ 			uint16_t ret_eport = ntohs(ret_ext6->sin6_port);
+ 			eport = ret_eport;
+ 		} else {
++			upnp_invoke_rrscript(peerip_s, pcp_msg_info->peer_port,
++				pcp_msg_info->mapped_str, pcp_msg_info->int_port,
++				protocol, "UPnP-PCP", 1, "PCP CANNOT_PROVIDE_EXTERNAL");
+ 			return PCP_ERR_CANNOT_PROVIDE_EXTERNAL;
+ 		}
+ 	}
+@@ -731,6 +735,9 @@ static int CreatePCPPeer_NAT(pcp_info_t *pcp_msg_info)
+ 			       peerip_s,
+ 			       pcp_msg_info->peer_port,
+ 			       pcp_msg_info->desc);
++			upnp_invoke_rrscript(peerip_s, pcp_msg_info->peer_port,
++				pcp_msg_info->mapped_str, pcp_msg_info->int_port,
++				protocol, "UPnP-PCP", 1, "PCP NO_RESOURCES");
+ 			return PCP_ERR_NO_RESOURCES;
+ 		}
+ 	}
+@@ -747,6 +754,9 @@ static int CreatePCPPeer_NAT(pcp_info_t *pcp_msg_info)
+ 			       pcp_msg_info->peer_port,
+ 			       pcp_msg_info->desc);
+ 			pcp_msg_info->result_code = PCP_ERR_NO_RESOURCES;
++			upnp_invoke_rrscript(peerip_s, pcp_msg_info->peer_port,
++				pcp_msg_info->mapped_str, pcp_msg_info->int_port,
++				protocol, "UPnP-PCP", 1, "PCP NO_RESOURCES");
+ 			return PCP_ERR_NO_RESOURCES;
+ 		}
+ 	}
+@@ -762,9 +772,16 @@ static int CreatePCPPeer_NAT(pcp_info_t *pcp_msg_info)
+ 				    pcp_msg_info->protocol,
+ 				    pcp_msg_info->desc,
+ 				    timestamp);
+-	if (r < 0)
++	if (r < 0) {
++		upnp_invoke_rrscript(peerip_s, pcp_msg_info->peer_port,
++			pcp_msg_info->mapped_str, pcp_msg_info->int_port,
++			protocol, "UPnP-PCP", 1, "PCP NO_RESOURCES");
+ 		return PCP_ERR_NO_RESOURCES;
++	}
+ 	pcp_msg_info->ext_port = eport;
++	upnp_invoke_rrscript(peerip_s, pcp_msg_info->peer_port,
++		pcp_msg_info->mapped_str, pcp_msg_info->int_port,
++		protocol, "UPnP-PCP", 0, NULL);
+ 	return PCP_SUCCESS;
+ }
+ 
+@@ -892,6 +909,7 @@ static int CreatePCPMap_NAT(pcp_info_t *pcp_msg_info)
+ 	uint16_t iport_old, eport_first = 0;
+ 	int any_eport_allowed = 0;
+ 	unsigned int timestamp = time(NULL) + pcp_msg_info->lifetime;
++	const char *protocol = (pcp_msg_info->protocol == IPPROTO_TCP) ? "TCP" : "UDP";
+ 
+ 	if (pcp_msg_info->ext_port == 0) {
+ 		pcp_msg_info->ext_port = pcp_msg_info->int_port;
+@@ -918,6 +936,9 @@ static int CreatePCPMap_NAT(pcp_info_t *pcp_msg_info)
+ 							   ((struct in_addr*)pcp_msg_info->mapped_ip->s6_addr)[3],
+ 							   pcp_msg_info->int_port)))) {
+ 			if (pcp_msg_info->pfailure_present) {
++				upnp_invoke_rrscript(NULL, pcp_msg_info->ext_port,
++					pcp_msg_info->mapped_str, pcp_msg_info->int_port,
++					protocol, "UPnP-PCP", 1, "PCP CANNOT_PROVIDE_EXTERNAL");
+ 				return PCP_ERR_CANNOT_PROVIDE_EXTERNAL;
+ 			}
+ 			pcp_msg_info->ext_port++;
+@@ -952,6 +973,9 @@ static int CreatePCPMap_NAT(pcp_info_t *pcp_msg_info)
+ 			   || (pcp_msg_info->int_port != iport_old)) {
+ 				/* redirection already existing */
+ 				if (pcp_msg_info->pfailure_present) {
++					upnp_invoke_rrscript(NULL, pcp_msg_info->ext_port,
++						pcp_msg_info->mapped_str, pcp_msg_info->int_port,
++						protocol, "UPnP-PCP", 1, "PCP CANNOT_PROVIDE_EXTERNAL");
+ 					return PCP_ERR_CANNOT_PROVIDE_EXTERNAL;
+ 				}
+ 			} else {
+@@ -963,6 +987,9 @@ static int CreatePCPMap_NAT(pcp_info_t *pcp_msg_info)
+ 						       pcp_msg_info->protocol)==0) {
+ 					break;
+ 				} else if (pcp_msg_info->pfailure_present) {
++					upnp_invoke_rrscript(NULL, pcp_msg_info->ext_port,
++						pcp_msg_info->mapped_str, pcp_msg_info->int_port,
++						protocol, "UPnP-PCP", 1, "PCP CANNOT_PROVIDE_EXTERNAL");
+ 					return PCP_ERR_CANNOT_PROVIDE_EXTERNAL;
+ 				}
+ 			}
+@@ -980,8 +1007,15 @@ static int CreatePCPMap_NAT(pcp_info_t *pcp_msg_info)
+ 				   pcp_msg_info->protocol,
+ 				   pcp_msg_info->desc,
+ 				   timestamp);
+-	if (r < 0)
++	if (r < 0) {
++		upnp_invoke_rrscript(NULL, pcp_msg_info->ext_port,
++			pcp_msg_info->mapped_str, pcp_msg_info->int_port,
++			protocol, "UPnP-PCP", 1, "PCP NO_RESOURCES");
+ 		return PCP_ERR_NO_RESOURCES;
++	}
++	upnp_invoke_rrscript(NULL, pcp_msg_info->ext_port,
++		pcp_msg_info->mapped_str, pcp_msg_info->int_port,
++		protocol, "UPnP-PCP", 0, NULL);
+ 	pcp_msg_info->ext_port = pcp_msg_info->int_port;
+ 	return PCP_SUCCESS;
+ }
+diff --git a/upnpglobalvars.c b/upnpglobalvars.c
+index 1d1f477..427ac85 100644
+--- a/upnpglobalvars.c
++++ b/upnpglobalvars.c
+@@ -119,6 +119,8 @@ int n_nfqix = 0;
+ unsigned nfqix[MAX_LAN_ADDR];
+ #endif /* ENABLE_NFQUEUE */
+ 
++const char * miniupnpd_rrscript = "";
++
+ struct lan_addr_list lan_addrs;
+ 
+ #ifdef ENABLE_IPV6
+diff --git a/upnpglobalvars.h b/upnpglobalvars.h
+index 574d953..10ac58e 100644
+--- a/upnpglobalvars.h
++++ b/upnpglobalvars.h
+@@ -134,6 +134,8 @@ extern int n_nfqix;
+ extern unsigned nfqix[];
+ #endif
+ 
++extern const char * miniupnpd_rrscript;
++
+ /* lan addresses to listen to SSDP traffic */
+ extern struct lan_addr_list lan_addrs;
+ 
+diff --git a/upnpredirect.c b/upnpredirect.c
+index 9511273..1d60f4c 100644
+--- a/upnpredirect.c
++++ b/upnpredirect.c
+@@ -11,12 +11,14 @@
+ #include <syslog.h>
+ #include <sys/types.h>
+ #include <sys/socket.h>
++#include <sys/wait.h>
+ #include <netinet/in.h>
+ #include <net/if.h>
+ #include <arpa/inet.h>
+ 
+ #include <stdio.h>
+ #include <ctype.h>
++#include <errno.h>
+ #include <unistd.h>
+ 
+ #include "macros.h"
+@@ -734,3 +736,48 @@ write_ruleset_details(int s)
+ }
+ #endif
+ 
++void upnp_invoke_rrscript(const char * eaddr, unsigned short eport,
++                          const char * iaddr, unsigned short iport,
++                          const char * proto, const char * source,
++                          int failed, const char * reason)
++{
++	pid_t pid;
++	char eps[6];
++	char ips[6];
++
++	if (!miniupnpd_rrscript || !miniupnpd_rrscript[0] || !source)
++		return;
++
++	eaddr = (!eaddr || !eaddr[0] || (eaddr[0] == '*' && !eaddr[1])) ? "all" : eaddr;
++	reason = (failed && (!reason || !reason[0])) ? "Unknown" : reason;
++
++	sprintf(eps, "%hu", eport);
++	sprintf(ips, "%hu", iport);
++
++	pid = fork();
++	if (pid == 0) {
++		/* Child starts new session and forks grandchild. */
++		if (setsid() == -1)
++			_exit(errno);
++
++		pid = fork();
++		if (pid == 0) {
++			/* Grandchild execs script. */
++			const char* args[] = { miniupnpd_rrscript,
++				eaddr, eps,
++				iaddr, ips,
++				proto, source,
++				failed ? "no" : "yes", failed ? reason : "ok",
++				NULL
++			};
++			execv(args[0], (char**)args);
++			_exit(errno);
++		} else {
++			/* Child doesn't have to wait grandchild. */
++			_exit(pid == -1 ? errno : 0);
++		}
++	} else if (pid > 0) {
++		/* Parent waits child. */
++		waitpid(pid, NULL, 0);
++	}
++}
+diff --git a/upnpredirect.h b/upnpredirect.h
+index b549824..823456b 100644
+--- a/upnpredirect.h
++++ b/upnpredirect.h
+@@ -114,6 +114,11 @@ void
+ write_ruleset_details(int s);
+ #endif
+ 
++void upnp_invoke_rrscript(const char * eaddr, unsigned short eport,
++                          const char * iaddr, unsigned short iport,
++                          const char * proto, const char * source,
++                          int failed, const char * reason);
++
+ #endif
+ 
+ 
+diff --git a/upnpsoap.c b/upnpsoap.c
+index 6c6cb3f..452b3f4 100644
+--- a/upnpsoap.c
++++ b/upnpsoap.c
+@@ -450,19 +450,6 @@ AddPortMapping(struct upnphttp * h, const char * action, const char * ns)
+ 		}
+ 	}
+ 
+-	/* check if NewInternalAddress is the client address */
+-	if(GETFLAG(SECUREMODEMASK))
+-	{
+-		if(h->clientaddr.s_addr != result_ip.s_addr)
+-		{
+-			syslog(LOG_INFO, "Client %s tried to redirect port to %s",
+-			       inet_ntoa(h->clientaddr), int_ip);
+-			ClearNameValueList(&data);
+-			SoapError(h, 718, "ConflictInMappingEntry");
+-			return;
+-		}
+-	}
+-
+ 	int_port = GetValueFromNameValueList(&data, "NewInternalPort");
+ 	ext_port = GetValueFromNameValueList(&data, "NewExternalPort");
+ 	protocol = GetValueFromNameValueList(&data, "NewProtocol");
+@@ -487,6 +474,22 @@ AddPortMapping(struct upnphttp * h, const char * action, const char * ns)
+ 	}
+ 
+ 	leaseduration = leaseduration_str ? atoi(leaseduration_str) : 0;
++
++	/* check if NewInternalAddress is the client address */
++	if(GETFLAG(SECUREMODEMASK))
++	{
++		if(h->clientaddr.s_addr != result_ip.s_addr)
++		{
++			syslog(LOG_INFO, "Client %s tried to redirect port to %s",
++			       inet_ntoa(h->clientaddr), int_ip);
++			ClearNameValueList(&data);
++			upnp_invoke_rrscript(r_host, eport, int_ip, iport,
++				protocol, "UPnP-SOAP", 1, "Not authorized (secure mode)");
++			SoapError(h, 718, "ConflictInMappingEntry");
++			return;
++		}
++	}
++
+ #ifdef IGD_V2
+ 	/* PortMappingLeaseDuration can be either a value between 1 and
+ 	 * 604800 seconds or the zero value (for infinite lease time).
+@@ -531,20 +534,32 @@ AddPortMapping(struct upnphttp * h, const char * action, const char * ns)
+ 	switch(r)
+ 	{
+ 	case 0:	/* success */
++		upnp_invoke_rrscript(r_host, eport, int_ip, iport,
++			protocol, "UPnP-SOAP", 0, NULL);
+ 		bodylen = snprintf(body, sizeof(body), resp,
+ 		                   action, ns/*SERVICE_TYPE_WANIPC*/);
+ 		BuildSendAndCloseSoapResp(h, body, bodylen);
+ 		break;
+ 	case -4:
+ #ifdef IGD_V2
++		upnp_invoke_rrscript(r_host, eport, int_ip, iport,
++			protocol, "UPnP-SOAP", 1, "Port already in use");
+ 		SoapError(h, 729, "ConflictWithOtherMechanisms");
+ 		break;
+ #endif /* IGD_V2 */
+ 	case -2:	/* already redirected */
++		upnp_invoke_rrscript(r_host, eport, int_ip, iport,
++			protocol, "UPnP-SOAP", 1, "Port already redirected");
++		SoapError(h, 718, "ConflictInMappingEntry");
++		break;
+ 	case -3:	/* not permitted */
++		upnp_invoke_rrscript(r_host, eport, int_ip, iport,
++			protocol, "UPnP-SOAP", 1, "Not authorized");
+ 		SoapError(h, 718, "ConflictInMappingEntry");
+ 		break;
+ 	default:
++		upnp_invoke_rrscript(r_host, eport, int_ip, iport,
++			protocol, "UPnP-SOAP", 1, "Internal error");
+ 		SoapError(h, 501, "ActionFailed");
+ 	}
+ }
+@@ -644,6 +659,8 @@ AddAnyPortMapping(struct upnphttp * h, const char * action, const char * ns)
+ 			syslog(LOG_INFO, "Client %s tried to redirect port to %s",
+ 			       inet_ntoa(h->clientaddr), int_ip);
+ 			ClearNameValueList(&data);
++			upnp_invoke_rrscript(r_host, eport, int_ip, iport,
++				protocol, "UPnP-SOAP", 1, "Not authorized (secure mode)");
+ 			SoapError(h, 606, "Action not authorized");
+ 			return;
+ 		}
+@@ -665,18 +682,31 @@ AddAnyPortMapping(struct upnphttp * h, const char * action, const char * ns)
+ 	switch(r)
+ 	{
+ 	case 0:	/* success */
++		upnp_invoke_rrscript(r_host, eport, int_ip, iport,
++			protocol, "UPnP-SOAP", 0, NULL);
+ 		bodylen = snprintf(body, sizeof(body), resp,
+ 		              action, ns, /*SERVICE_TYPE_WANIPC,*/
+ 					  eport, action);
+ 		BuildSendAndCloseSoapResp(h, body, bodylen);
+ 		break;
+ 	case -2:	/* already redirected */
++		upnp_invoke_rrscript(r_host, eport, int_ip, iport,
++			protocol, "UPnP-SOAP", 1, "Port already redirected");
+ 		SoapError(h, 718, "ConflictInMappingEntry");
+ 		break;
+ 	case -3:	/* not permitted */
++		upnp_invoke_rrscript(r_host, eport, int_ip, iport,
++			protocol, "UPnP-SOAP", 1, "Not authorized");
+ 		SoapError(h, 606, "Action not authorized");
+ 		break;
++	case -4:
++		upnp_invoke_rrscript(r_host, eport, int_ip, iport,
++			protocol, "UPnP-SOAP", 1, "Port already in use");
++		SoapError(h, 501, "ActionFailed");
++		break;
+ 	default:
++		upnp_invoke_rrscript(r_host, eport, int_ip, iport,
++			protocol, "UPnP-SOAP", 1, "Internal error");
+ 		SoapError(h, 501, "ActionFailed");
+ 	}
+ }
+-- 
+2.14.3
+

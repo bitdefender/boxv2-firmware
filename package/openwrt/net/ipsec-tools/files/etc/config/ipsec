@@ -1,0 +1,5 @@
+
+# Copyright (C) 2006 OpenWrt.org
+
+config ipsec general
+	option count	'0'

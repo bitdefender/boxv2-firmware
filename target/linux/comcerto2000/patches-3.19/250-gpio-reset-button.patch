@@ -1,0 +1,267 @@
+diff -Ndaur linux-3.19.3/drivers/gpio/boxreset-main.c linux-3.19.3/drivers/gpio/boxreset-main.c
+--- linux-3.19.3/drivers/gpio/boxreset-main.c	1970-01-01 02:00:00.000000000 +0200
++++ linux-3.19.3/drivers/gpio/boxreset-main.c	2017-05-26 19:04:49.397241375 +0300
+@@ -0,0 +1,113 @@
++#include <linux/init.h>
++#include <linux/module.h>
++#include <linux/kernel.h>
++#include <linux/gpio.h>
++#include <linux/timer.h>
++#include <linux/reboot.h>
++#include <linux/moduleparam.h>
++
++#include "boxreset-uart.h"
++
++MODULE_DESCRIPTION("BOX gpio reset");
++MODULE_LICENSE("GPL");
++MODULE_AUTHOR("Bogdan Harjoc <bharjoc@bitdefender.com>");
++
++int disable;
++module_param(disable, uint, 0644);
++MODULE_PARM_DESC(disable, "Disable reset on gpio button press (default 0 aka do the reset)");
++
++static void boxr_timer_fn(unsigned long arg);
++
++DEFINE_TIMER(boxr_timer, boxr_timer_fn, 0, 0);
++
++#define TIMER_FREQ 25
++#define NUM_VALUES 4
++
++static unsigned char boxr_gpio_values[NUM_VALUES] = { };
++
++static long (*boxr_orig_panic_blink)(int state);
++
++static void boxr_timer_fn(unsigned long arg)
++{
++    if (disable)
++        return;
++
++    memmove(boxr_gpio_values, boxr_gpio_values + 1, NUM_VALUES - 1);
++    
++    boxr_gpio_values[NUM_VALUES-1] = gpio_get_value(49) == 0;
++
++    if (memchr(boxr_gpio_values, 0, NUM_VALUES) == 0)
++        emergency_restart();
++
++    mod_timer(&boxr_timer, jiffies + HZ/TIMER_FREQ);
++}
++
++#if 0
++static unsigned char led_cmd_spinning[] = {
++    0x02, 0x00, 0x10, 0x02, 0x04, 0xff, 0xff, 0xff, 0x07, 0x08, 0x03
++};
++#endif
++
++static void send_ledboard_cmd(void)
++{
++    // not working yet, so we don't do blinking lights at panic for now
++
++#if 0
++    int i;
++    
++    //c2k_init_uart_led();
++
++    //c2k_setbrg(57600);
++
++    for (i=0; i<sizeof(led_cmd_spinning); i++)
++        c2k_putc(led_cmd_spinning[i]);
++#endif
++}
++
++static long boxr_panic_blink(int state)
++{
++    static int called = 0;
++    
++    if (called) return 0;
++    called = 1;
++    
++    send_ledboard_cmd();
++
++    return 0;
++}
++
++static int __init boxr_init(void)
++{
++	int ret;
++
++	ret = gpio_request(49, "box-reset");
++    if (ret) {
++        printk("gpio_request: %d\n", ret);
++        return ret;
++    }
++
++	gpio_direction_input(49);
++	gpio_set_debounce(49, 50);
++	gpio_export(49, 0);
++    
++    mod_timer(&boxr_timer, jiffies + HZ/TIMER_FREQ);
++    
++    boxr_orig_panic_blink = panic_blink;
++    panic_blink = boxr_panic_blink;
++
++	return 0;
++}
++
++static void __exit boxr_exit(void)
++{
++    if (panic_blink == boxr_panic_blink)
++        panic_blink = boxr_orig_panic_blink;
++
++    del_timer(&boxr_timer);
++
++	gpio_unexport(49);
++	gpio_free(49);
++}
++
++module_init(boxr_init);
++module_exit(boxr_exit);
+diff -Ndaur linux-3.19.3/drivers/gpio/boxreset-uart.c linux-3.19.3/drivers/gpio/boxreset-uart.c
+--- linux-3.19.3/drivers/gpio/boxreset-uart.c	1970-01-01 02:00:00.000000000 +0200
++++ linux-3.19.3/drivers/gpio/boxreset-uart.c	2017-05-26 18:30:25.392084230 +0300
+@@ -0,0 +1,105 @@
++// not working yet so disabled. (setup via stty and sending just the led cmd doesn't work either)
++
++#if 0
++
++#include <linux/module.h>
++#include <linux/kernel.h>
++#include <linux/io.h>
++
++#include <mach/comcerto-2000/clk-rst.h>
++
++#include "boxreset-uart.h"
++
++/* we can't rely on anything during a panic, so reset the uart and write to it directly */
++
++//////////////// GPIO SETUP //////////////////////
++
++#define c2k_readl(a) readl((void *)(a))
++#define c2k_writel(v, a) writel((v), (void *)(a))
++
++// why is GPIO_8 defined as 3 << 16 for comcerto ?
++#define C2K_GPIO_8 0x00000100
++#define C2K_GPIO_9 0x00000200
++
++#define GPIO8_UART0_RX		(0x2 << 16)
++#define GPIO9_UART0_TX		(0x2 << 18)
++#define UART0_BUS	(GPIO8_UART0_RX | GPIO9_UART0_TX)
++
++void c2k_init_uart_led(void)
++{
++    // select alternate function for GPIO 8 and 9
++    c2k_writel((c2k_readl(COMCERTO_GPIO_PIN_SELECT_REG) & ~(C2K_GPIO_8 | C2K_GPIO_9)) | UART0_BUS, COMCERTO_GPIO_PIN_SELECT_REG);
++    
++    // disable output enable GPIO 8 (i.e. set as input)
++    c2k_writel(c2k_readl(COMCERTO_GPIO_OE_REG) & ~C2K_GPIO_8, COMCERTO_GPIO_OE_REG);
++
++    // enable  output enable GPIO 9
++    c2k_writel(c2k_readl(COMCERTO_GPIO_OE_REG) | C2K_GPIO_9, COMCERTO_GPIO_OE_REG);
++    
++    // set GPIO 9 to 0
++    c2k_writel(c2k_readl(COMCERTO_GPIO_OUTPUT_REG) & ~C2K_GPIO_9, COMCERTO_GPIO_OUTPUT_REG);
++}
++
++//////////////// CLOCK FREQUENCY //////////////////////
++
++unsigned long HAL_get_clk_freq(u32 ctrl_reg, u32 div_reg);
++
++unsigned HAL_get_axi_clk(void)
++{   
++    return HAL_get_clk_freq(AXI_CLK_CNTRL_0, AXI_CLK_DIV_CNTRL);
++}
++
++//////////////// SET BAUDRATE //////////////////////
++
++#define LCR_DLAB        0x80
++#define UART_LCR        0x0C
++#define UART_DLL        0x00
++#define UART_DLH        0x04
++#define LCR_CHAR_LEN_8      0x03
++#define FCR_FIFOEN      (1 << 0)
++#define FCR_RCVRRES     (1 << 1)
++#define FCR_XMITRES     (1 << 2)
++#define UART_FCR        0x08
++
++#define UART0_BASEADDR 0x96300000 /* the ledboard */
++
++/* 
++ * 16-bit Divisor Latch register that contains the baud rate divisor for the UART.
++ *
++ * baud rate = (serial clock freq) / (16 * divisor).
++ */
++void c2k_setbrg(int baudrate)
++{
++    size_t map_base = UART0_BASEADDR;
++    u32 clock = HAL_get_axi_clk();
++	u32 div;
++    
++	/* round to nearest */
++	div = (clock + 8 * baudrate) / (16 * baudrate);
++
++	c2k_writel(LCR_DLAB, map_base + UART_LCR); /* Enable Data latch to write divisor latch */
++
++	c2k_writel( (div & 0xFF), map_base + UART_DLL); 
++	c2k_writel( (div >> 8 ) & 0xFF, map_base + UART_DLH);
++
++	c2k_writel(0x00, map_base + UART_LCR); /* Disable date latch */
++	c2k_writel(LCR_CHAR_LEN_8 , map_base + UART_LCR); /* Eight bits per character, 1 stop bit */
++	c2k_writel(FCR_FIFOEN | FCR_RCVRRES | FCR_XMITRES, map_base + UART_FCR); /* Reset Tx and Rx FIFOs; Enable FIFO mode; Set Rx FIFO threshold */
++}
++
++//////////////// PUTC //////////////////////
++
++#define UART_LSR    0x14
++#define LSR_THRE    0x20
++#define UART_THR    0x00
++
++void c2k_putc(unsigned char c)
++{
++    size_t map_base = UART0_BASEADDR;
++
++	/* wait for room in the tx FIFO on FFUART */
++	while ((c2k_readl(map_base + UART_LSR) & LSR_THRE) == 0) ;
++	c2k_writel(c, map_base + UART_THR);
++}
++
++#endif // 0
+diff -Ndaur linux-3.19.3/drivers/gpio/boxreset-uart.h linux-3.19.3/drivers/gpio/boxreset-uart.h
+--- linux-3.19.3/drivers/gpio/boxreset-uart.h	1970-01-01 02:00:00.000000000 +0200
++++ linux-3.19.3/drivers/gpio/boxreset-uart.h	2017-05-26 18:30:27.312086427 +0300
+@@ -0,0 +1,8 @@
++#ifndef _BOX_RESET_UART_H
++#define _BOX_RESET_UART_H
++
++void c2k_init_uart_led(void);
++void c2k_setbrg(int baudrate);
++void c2k_putc(unsigned char c);
++
++#endif // _BOX_RESET_UART_H
+diff -Ndaur linux-3.19.3/drivers/gpio/Kconfig linux-3.19.3/drivers/gpio/Kconfig
+--- linux-3.19.3/drivers/gpio/Kconfig	2017-05-26 16:36:41.365861526 +0300
++++ linux-3.19.3/drivers/gpio/Kconfig	2017-05-26 18:30:34.336094460 +0300
+@@ -43,6 +43,11 @@
+ 
+ if GPIOLIB
+ 
++config GPIO_BOX_RESET
++	def_tristate m
++	depends on GPIO_C2K
++	tristate "BOX reset button, TODO make it builtin"
++
+ config GPIO_DEVRES
+ 	def_bool y
+ 	depends on HAS_IOMEM
+diff -Ndaur linux-3.19.3/drivers/gpio/Makefile linux-3.19.3/drivers/gpio/Makefile
+--- linux-3.19.3/drivers/gpio/Makefile	2017-05-26 16:36:41.365861526 +0300
++++ linux-3.19.3/drivers/gpio/Makefile	2017-05-26 18:30:30.912090545 +0300
+@@ -2,6 +2,10 @@
+ 
+ ccflags-$(CONFIG_DEBUG_GPIO)	+= -DDEBUG
+ 
++obj-$(CONFIG_GPIO_BOX_RESET)	+= boxreset.o
++
++boxreset-objs := boxreset-main.o boxreset-uart.o
++
+ obj-$(CONFIG_GPIO_DEVRES)	+= devres.o
+ obj-$(CONFIG_GPIOLIB)		+= gpiolib.o
+ obj-$(CONFIG_GPIOLIB)		+= gpiolib-legacy.o

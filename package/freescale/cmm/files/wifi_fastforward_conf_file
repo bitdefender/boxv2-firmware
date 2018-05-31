@@ -1,0 +1,8 @@
+#WiFi fastforward configuration
+#direct_path_rx-This option/optimization is implmented for atheros/QCA driver.
+#               For other devices/drivers this option should be disabled.
+config wifi_fastforward
+        option ifname   ra0
+
+config wifi_fastforward
+        option ifname   rai0

@@ -1,0 +1,1221 @@
+diff --git a/arch/arm/mach-comcerto/Kconfig b/arch/arm/mach-comcerto/Kconfig
+index 3fd41da..ee14b1d 100644
+--- a/arch/arm/mach-comcerto/Kconfig
++++ b/arch/arm/mach-comcerto/Kconfig
+@@ -66,6 +66,13 @@ config C2K_MFCN_EVM
+ 	help
+ 	  Say Y here if you intend to run this kernel with a C2K MFCN EVM.
+ 
++config BOXV2
++        bool "BOXV2"
++        depends on ARCH_M86XXX
++	select COMCERTO_UART0_SUPPORT
++        help
++          Say Y here if you intend to run this kernel with a Bitdefender BOXv2.
++
+ config C2K_ASIC
+ 	bool "ASIC"
+ 	depends on ARCH_M86XXX
+@@ -133,6 +140,12 @@ config COMCERTO_MEMBUF
+ 	  directly by the PFE. Currently the PFE hold tone generation feature requires
+ 	  this driver to be enabled.
+ 
++config BOXV2_USBEMMC
++        bool "BOXv2 USB/eMMC support"
++        default n
++        help
++          Say Y if you intend to use USB/eMMC on BOXv2 hardware.
++
+ config COMCERTO_NUM_PCIES
+ 	int "Number of PCIe controllers to be enabled (0-2)"
+ 	range 0 2
+diff --git a/arch/arm/mach-comcerto/Makefile b/arch/arm/mach-comcerto/Makefile
+index 97244cc..db29eb8 100644
+--- a/arch/arm/mach-comcerto/Makefile
++++ b/arch/arm/mach-comcerto/Makefile
+@@ -24,6 +24,7 @@ obj-$(CONFIG_COMCERTO_TDM_CLOCK)                += sysfstdm.o
+ obj-$(CONFIG_RTSM_C2K) 				+= board-c2krtsm.o
+ obj-$(CONFIG_C2K_EVM) 				+= board-c2kevm.o
+ obj-$(CONFIG_C2K_MFCN_EVM)			+= board-c2kmfcnevm.o
++obj-$(CONFIG_BOXV2)					+= board-boxv2.o
+ obj-$(CONFIG_C2K_ASIC) 				+= board-c2kasic.o
+ obj-$(CONFIG_SMP)				+= platsmp.o headsmp.o
+ obj-$(CONFIG_COMCERTO_MSP)			+= msp/
+diff --git a/arch/arm/mach-comcerto/board-boxv2.c b/arch/arm/mach-comcerto/board-boxv2.c
+new file mode 100644
+index 0000000..13d0c91
+--- /dev/null
++++ b/arch/arm/mach-comcerto/board-boxv2.c
+@@ -0,0 +1,552 @@
++/*
++ * arch/arm/mach-comcerto/board-boxv2.c
++ *
++ *  Copyright (C) 2012 Mindspeed Technologies, Inc.
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
++ */
++
++#include <linux/version.h>
++#include <linux/sched.h>
++#include <linux/device.h>
++#include <linux/serial_8250.h>
++#include <linux/memblock.h>
++#include <linux/phy.h>
++
++#include <linux/mtd/mtd.h>
++#if defined(CONFIG_MTD_NAND_COMCERTO) || defined(CONFIG_MTD_NAND_COMCERTO_MODULE)
++#include <linux/mtd/nand.h>
++#endif
++#include <linux/mtd/partitions.h>
++
++#if defined(CONFIG_SPI_MSPD_LOW_SPEED) || defined(CONFIG_SPI_MSPD_HIGH_SPEED)
++#include <linux/spi/spi.h>
++#endif
++
++#include <asm/sizes.h>
++#include <asm/setup.h>
++#include <asm/mach-types.h>
++#include <asm/io.h>
++
++#include <asm/mach/flash.h>
++#include <asm/mach/arch.h>
++
++#include <mach/hardware.h>
++#include <mach/irqs.h>
++#include <mach/dma.h>
++#include <mach/reset.h>
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,18,0)
++#include <linux/platform_data/dma-dw.h>
++#else
++#include <linux/dw_dmac.h>
++#endif
++
++#include <linux/clockchips.h>
++#include <linux/init.h>
++#include <linux/smp.h>
++#include <asm/smp_twd.h>
++//#include <asm/localtimer.h>
++//#include <asm/hardware/gic.h>
++#include <linux/irqchip/arm-gic.h>
++#include <asm/mach/time.h>
++#include <mach/gpio.h>
++#include <asm/suspend.h>
++
++
++//#include <mach/comcerto-2000/timer.h>
++extern void comcerto_timer_init(void);
++extern struct smp_operations comcerto_smp_ops;
++
++
++extern void platform_reserve(void);
++extern void device_map_io (void);
++extern void device_irq_init(void);
++extern void device_init(void);
++extern void mac_addr_init(struct comcerto_pfe_platform_data *);
++extern struct sys_timer comcerto_timer;
++
++static void __init board_gpio_init(void)
++{
++#ifdef CONFIG_COMCERTO_PFE_UART_SUPPORT
++	writel((readl(COMCERTO_GPIO_PIN_SELECT_REG) & ~PFE_UART_GPIO) | PFE_UART_BUS, COMCERTO_GPIO_PIN_SELECT_REG);
++	c2k_gpio_pin_stat.c2k_gpio_pins_0_31 |= PFE_UART_GPIO_PIN; /* GPIOs 12 & 13 are used for PFE_UART */
++#endif
++
++#if defined(CONFIG_SPI_MSPD_LOW_SPEED) || defined(CONFIG_SPI2_MSPD_LOW_SPEED)
++	/* enable SPI pins */
++	writel((readl(COMCERTO_GPIO_PIN_SELECT_REG1) & ~(SPI_MUX_GPIO_1)) | (SPI_MUX_BUS_1), COMCERTO_GPIO_PIN_SELECT_REG1);
++	writel((readl(COMCERTO_GPIO_63_32_PIN_SELECT) & ~(SPI_MUX_GPIO_2)) | (SPI_MUX_BUS_2), COMCERTO_GPIO_63_32_PIN_SELECT);
++	c2k_gpio_pin_stat.c2k_gpio_pins_0_31 |= SPI_MUX_GPIO_1_PIN; /* GPIOs 18,19, 21,22, 30,31 are used for SPI*/
++	c2k_gpio_pin_stat.c2k_gpio_pins_32_63 |= SPI_MUX_GPIO_2_PIN; /* GPIO 32 is used for SPI*/
++#endif
++
++#if defined(CONFIG_COMCERTO_I2C_SUPPORT)
++	writel((readl(COMCERTO_GPIO_PIN_SELECT_REG1) & ~I2C_GPIO) | I2C_BUS, COMCERTO_GPIO_PIN_SELECT_REG1);
++	c2k_gpio_pin_stat.c2k_gpio_pins_0_31 |= I2C_GPIO_PIN;
++#endif
++
++#if defined(CONFIG_MTD_NAND_COMCERTO) || defined(CONFIG_MTD_NAND_COMCERTO_MODULE)
++	writel((readl(COMCERTO_GPIO_PIN_SELECT_REG1) & ~NAND_GPIO) | NAND_BUS, COMCERTO_GPIO_PIN_SELECT_REG1);
++	c2k_gpio_pin_stat.c2k_gpio_pins_0_31 |= NAND_GPIO_PIN;
++#endif
++}
++
++static struct resource rtc_res[] = {
++       {
++               .start = COMCERTO_APB_RTC_BASE,
++               .end = COMCERTO_APB_RTC_BASE + SZ_32 - 1,
++               .flags = IORESOURCE_MEM,
++       },
++       {
++               .start = IRQ_RTC_ALM,
++               .flags = IORESOURCE_IRQ,
++       },
++       {
++               .start = IRQ_RTC_PRI,
++               .flags = IORESOURCE_IRQ,
++       },
++};
++static struct platform_device rtc_dev = {
++       .name = "c2k-rtc",
++       .id = -1,
++       .num_resources = ARRAY_SIZE(rtc_res),
++       .resource = rtc_res,
++};
++
++/* --------------------------------------------------------------------
++ *  DMAC controller
++ * -------------------------------------------------------------------- */
++#if defined(CONFIG_COMCERTO_DW_DMA_SUPPORT)
++static struct resource dw_dmac_resource[] = {
++	{
++		.start          = DW_DMA_DMAC_BASEADDR,
++		.end            = DW_DMA_DMAC_BASEADDR + 0x2C0,
++		.flags          = IORESOURCE_MEM,
++	},
++	{
++		.start          = IRQ_DMAC,
++		.flags          = IORESOURCE_IRQ,
++	}
++};
++
++static struct dw_dma_platform_data dw_dmac_data = {
++	.nr_channels    = 8,
++};
++
++static u64 dw_dmac_dma_mask = DMA_BIT_MASK(32);
++
++static struct platform_device dw_dmac_device = {
++	.name           = "dw_dmac",
++	.id             = 0,
++	.dev            = {
++		.dma_mask = &dw_dmac_dma_mask,
++		.platform_data  = &dw_dmac_data,
++		.coherent_dma_mask = DMA_BIT_MASK(32),
++	},
++	.resource       = dw_dmac_resource,
++	.num_resources  = ARRAY_SIZE(dw_dmac_resource),
++};
++#endif
++
++/* --------------------------------------------------------------------
++ *  NAND device
++ * -------------------------------------------------------------------- */
++#if defined(CONFIG_MTD_NAND_COMCERTO) || defined(CONFIG_MTD_NAND_COMCERTO_MODULE)
++static struct resource comcerto_nand_resources[] = {
++	{
++		.start	= COMCERTO_NAND_FIO_ADDR,
++		.end	= COMCERTO_NAND_FIO_ADDR + COMCERTO_NAND_IO_SZ - 1,
++		.flags	= IORESOURCE_MEM,
++	}
++};
++
++static struct platform_device comcerto_nand = {
++	.name		= "comcertonand",
++	.id		= -1,
++	.dev		= {
++				.platform_data	= NULL,
++	},
++	.resource	= comcerto_nand_resources,
++	.num_resources	= ARRAY_SIZE(comcerto_nand_resources),
++};
++#endif
++
++/* --------------------------------------------------------------------
++ *  SPI bus controller
++ * -------------------------------------------------------------------- */
++#if defined(CONFIG_SPI_MSPD_LOW_SPEED) || defined(CONFIG_SPI_MSPD_HIGH_SPEED)
++
++#define	CLK_NAME	10
++struct spi_controller_pdata {
++	int use_dma;
++	int num_chipselects;
++	int bus_num;
++	u32 max_freq;
++	char clk_name[CLK_NAME];
++};
++
++struct spi_platform_data {
++	int type;
++	int dummy;
++};
++
++struct spi_controller_data {
++        u8 poll_mode;   /* 0 for contoller polling mode */
++        u8 type;        /* SPI/SSP/Micrwire */
++        u8 enable_dma;
++        void (*cs_control)(u32 command);
++};
++
++struct spi_platform_data spi_pdata = {
++	.type = 0,
++	.dummy = 0,
++};
++
++struct spi_controller_data spi_ctrl_data =  {
++        .poll_mode = 1,
++};
++
++static struct spi_board_info comcerto_spi_board_info[] = {
++	{
++		/* FIXME: for chipselect-0 */
++		.modalias = "s25fl256s0",
++		.chip_select = 0,
++		.max_speed_hz = 64*1000,
++		.bus_num = 0,
++		.irq = -1,
++		.mode = SPI_MODE_3,
++		.platform_data = &spi_pdata,
++                .controller_data = &spi_ctrl_data,
++	},
++};
++#endif
++
++#if defined(CONFIG_SPI_MSPD_LOW_SPEED)
++struct spi_controller_pdata ls_spi_pdata = {
++	.use_dma = 0,
++	.num_chipselects = 4,
++	.bus_num = 0,
++	.max_freq = 20 * 1000 * 1000,
++	.clk_name = "spi_i2c",
++};
++#endif
++
++#if defined(CONFIG_SPI_MSPD_LOW_SPEED) || defined(CONFIG_SPI2_MSPD_LOW_SPEED)
++static struct resource comcerto_spi_resource[] = {
++	{
++		.start  = COMCERTO_APB_SPI_BASE,
++		.end    = COMCERTO_APB_SPI_BASE + SZ_4K - 1,
++		.flags  = IORESOURCE_MEM,
++	},
++	{
++		.start  = IRQ_SPI_LS,
++		.flags  = IORESOURCE_IRQ,
++	}
++};
++
++static struct platform_device comcerto_spi = {
++	.name = "comcerto_spi",
++	.id = 0,
++	.num_resources = ARRAY_SIZE(comcerto_spi_resource),
++	.resource = comcerto_spi_resource,
++#if defined(CONFIG_SPI_MSPD_LOW_SPEED)
++	.dev = {
++		.platform_data = &ls_spi_pdata,
++	},
++#endif
++};
++#endif
++
++/* --------------------------------------------------------------------
++ *  I2C bus controller
++ * -------------------------------------------------------------------- */
++#if defined(CONFIG_COMCERTO_I2C_SUPPORT)
++static struct resource comcerto_i2c_resources[] = {
++	{
++		.start	= COMCERTO_APB_I2C_BASE,
++		.end	= COMCERTO_APB_I2C_BASE + SZ_4K - 1,
++		.flags	= IORESOURCE_MEM,
++	},
++	{
++		.start	= IRQ_I2C,
++		.flags	= IORESOURCE_IRQ,
++	},
++};
++
++static struct platform_device comcerto_i2c = {
++	.name           = "comcerto_i2c",
++	.id             = -1,
++	.num_resources  = ARRAY_SIZE(comcerto_i2c_resources),
++	.resource       = comcerto_i2c_resources,
++};
++#endif
++
++/* --------------------------------------------------------------------
++*  Watchdog
++* -------------------------------------------------------------------- */
++#ifdef CONFIG_MPCORE_WATCHDOG
++static struct resource comcerto_a9wd_resources[] = {
++	{
++		.start	= COMCERTO_TWD_BASE,
++		.end	= COMCERTO_TWD_BASE + 0xFF,
++		.flags	= IORESOURCE_MEM,
++	},
++	{
++		.name	= "mpcore_wdt",
++		.start	= IRQ_LOCALWDOG,
++		.flags	= IORESOURCE_IRQ,
++	},
++};
++
++static struct platform_device comcerto_a9wd = {
++	.name		= "mpcore_wdt",
++	.id             = -1,
++	.num_resources  = ARRAY_SIZE(comcerto_a9wd_resources),
++	.resource       = comcerto_a9wd_resources,
++};
++#endif
++
++#ifdef CONFIG_COMCERTO_WATCHDOG
++static struct resource comcerto_wdt_resources[] = {
++	{
++		.start	= COMCERTO_APB_TIMER_BASE + 0xD0,
++		.end	= COMCERTO_APB_TIMER_BASE + 0xD8,
++		.flags	= IORESOURCE_MEM,
++	},
++};
++
++static struct platform_device comcerto_wdt = {
++        .name   = "comcerto_wdt",
++        .id     = -1,
++	.num_resources  = ARRAY_SIZE(comcerto_wdt_resources),
++	.resource       = comcerto_wdt_resources,
++};
++#endif
++
++#if defined(CONFIG_COMCERTO_ELP_SUPPORT)
++/* --------------------------------------------------------------------
++ *  IPsec
++ * -------------------------------------------------------------------- */
++static struct resource comcerto_elp_resources[] = {
++	{
++		.name   = "elp",
++		.start  = COMCERTO_AXI_SPACC_PDU_BASE,
++		.end    = COMCERTO_AXI_SPACC_PDU_BASE + SZ_16M  - 1,
++		.flags  = IORESOURCE_MEM,
++	},
++	{
++		.name   = "irq_spacc",
++		.start  = IRQ_SPACC,
++		.end    = IRQ_SPACC,
++		.flags  = IORESOURCE_IRQ,
++	}
++};
++
++static u64 comcerto_elp_dma_mask = DMA_BIT_MASK(32);
++
++static struct platform_device  comcerto_elp_device = {
++	.name                   = "Elliptic-EPN1802",
++	.id                     = 0,
++	.num_resources          = 2,
++	.resource               = comcerto_elp_resources,
++	.dev = {
++		.dma_mask               = &comcerto_elp_dma_mask,
++		.coherent_dma_mask      = DMA_BIT_MASK(32),
++	},
++};
++#endif
++
++
++static struct resource comcerto_pfe_resources[] = {
++	{
++		.name	= "apb",
++		.start  = COMCERTO_APB_PFE_BASE,
++		.end    = COMCERTO_APB_PFE_BASE + COMCERTO_APB_PFE_SIZE - 1,
++		.flags  = IORESOURCE_MEM,
++	},
++	{
++		.name	= "axi",
++		.start  = COMCERTO_AXI_PFE_BASE,
++		.end    = COMCERTO_AXI_PFE_BASE + COMCERTO_AXI_PFE_SIZE - 1,
++		.flags  = IORESOURCE_MEM,
++	},
++	{
++		.name	= "ddr",
++		.start  = COMCERTO_PFE_DDR_BASE,
++		.end	= COMCERTO_PFE_DDR_BASE + COMCERTO_PFE_DDR_SIZE - 1,
++		.flags  = IORESOURCE_MEM,
++	},
++	{
++		.name	= "iram",
++		.start  = COMCERTO_PFE_IRAM_BASE,
++		.end	= COMCERTO_PFE_IRAM_BASE + COMCERTO_PFE_IRAM_SIZE - 1,
++		.flags  = IORESOURCE_MEM,
++	},
++        {
++                .name   = "ipsec",
++                .start  = COMCERTO_AXI_IPSEC_BASE,
++                .end    = COMCERTO_AXI_IPSEC_BASE + COMCERTO_AXI_IPSEC_SIZE - 1,
++                .flags  = IORESOURCE_MEM,
++        },
++
++	{
++		.name	= "hif",
++		.start  = IRQ_PFE_HIF,
++		.flags  = IORESOURCE_IRQ,
++	},
++};
++
++static struct comcerto_pfe_platform_data comcerto_pfe_pdata = {
++	.comcerto_eth_pdata[0] = {
++		.name = GEM0_ITF_NAME,
++		.device_flags = CONFIG_COMCERTO_GEMAC,
++		.mii_config = CONFIG_COMCERTO_USE_RGMII,
++		.gemac_mode = GEMAC_SW_CONF | GEMAC_SW_FULL_DUPLEX | GEMAC_SW_SPEED_1G,
++		.phy_flags = GEMAC_PHY_RGMII_ADD_DELAY,
++		.bus_id = 0,
++		.phy_id = 6,
++		.gem_id = 0,
++		.mac_addr = (u8[])GEM0_MAC,
++	},
++
++	.comcerto_eth_pdata[1] = {
++		.name = GEM1_ITF_NAME,
++		.device_flags = CONFIG_COMCERTO_GEMAC,
++		.mii_config = CONFIG_COMCERTO_USE_RGMII,
++		.gemac_mode = GEMAC_SW_CONF | GEMAC_SW_FULL_DUPLEX | GEMAC_SW_SPEED_1G,
++		.phy_flags = GEMAC_PHY_RGMII_ADD_DELAY,
++		.bus_id = 0,
++		.phy_id = 7,
++		.gem_id = 1,
++		.mac_addr = (u8[])GEM1_MAC,
++	},
++
++	/**
++	 * There is a single mdio bus coming out of C2K.  And that's the one
++	 * connected to GEM0. All PHY's, switchs will be connected to the same
++	 * bus using different addresses. Typically .bus_id is always 0, only
++	 * .phy_id will change in the different comcerto_eth_pdata[] structures above.
++	 */
++	.comcerto_mdio_pdata[0] = {
++		.enabled = 1,
++		.phy_mask = 0xFFFFFF3F,
++		.mdc_div = 96,
++		.irq = {
++			[6] = PHY_POLL,
++			[7] = PHY_POLL,
++		},
++	},
++};
++
++static u64 comcerto_pfe_dma_mask = DMA_BIT_MASK(32);
++
++static struct platform_device comcerto_pfe_device = {
++	.name		= "pfe",
++	.id		= 0,
++	.dev		= {
++		.platform_data		= &comcerto_pfe_pdata,
++		.dma_mask		= &comcerto_pfe_dma_mask,
++		.coherent_dma_mask	= DMA_BIT_MASK(32),
++	},
++	.num_resources	= ARRAY_SIZE(comcerto_pfe_resources),
++	.resource	= comcerto_pfe_resources,
++};
++
++static struct platform_device *comcerto_devices[] __initdata = {
++#if defined(CONFIG_MTD_NAND_COMCERTO) || defined(CONFIG_MTD_NAND_COMCERTO_MODULE)
++		&comcerto_nand,
++#endif
++#if defined(CONFIG_COMCERTO_I2C_SUPPORT)
++		&comcerto_i2c,
++#endif
++
++#if defined (CONFIG_MPCORE_WATCHDOG)
++		&comcerto_a9wd,
++#endif
++
++#if defined(CONFIG_COMCERTO_WATCHDOG)
++		&comcerto_wdt,
++#endif
++
++#if defined(CONFIG_SPI_MSPD_LOW_SPEED) || defined(CONFIG_SPI2_MSPD_LOW_SPEED)
++		&comcerto_spi,
++#endif
++#if defined(CONFIG_COMCERTO_DW_DMA_SUPPORT)
++		&dw_dmac_device,
++#endif
++		&comcerto_pfe_device,
++		&rtc_dev,
++#if defined(CONFIG_COMCERTO_ELP_SUPPORT)
++	&comcerto_elp_device,
++#endif
++};
++
++
++/************************************************************************
++ *  Expansion bus
++ *
++ ************************************************************************/
++/* This variable is used by comcerto-2000.c to initialize the expansion bus */
++int comcerto_exp_values[5][7]= {
++	/* ENABLE, BASE, SEG_SZ, CFG, TMG1, TMG2, TMG3 */
++	{0, (EXP_BUS_REG_BASE_CS0 >> 12), ((EXP_BUS_REG_BASE_CS0 + EXP_CS0_SEG_SIZE - 1) >> 12), EXP_MEM_BUS_SIZE_16, 0x03034007, 0x04040502, 0x00000002},		/*TODO Values to check*/
++	{0, (EXP_BUS_REG_BASE_CS1 >> 12), ((EXP_BUS_REG_BASE_CS1 + EXP_CS1_SEG_SIZE - 1) >> 12), EXP_RDY_EN|EXP_MEM_BUS_SIZE_32, 0x1A1A401F, 0x06060A04, 0x00000002},	/*TODO Values to check*/
++	{0, (EXP_BUS_REG_BASE_CS2 >> 12), ((EXP_BUS_REG_BASE_CS2 + EXP_CS2_SEG_SIZE - 1) >> 12), EXP_STRB_MODE|EXP_ALE_MODE|EXP_MEM_BUS_SIZE_8, 0x1A10201A, 0x03080403, 0x0000002},	/*TODO Values to check*/
++	{0, (EXP_BUS_REG_BASE_CS3 >> 12), ((EXP_BUS_REG_BASE_CS3 + EXP_CS3_SEG_SIZE - 1) >> 12), EXP_STRB_MODE|EXP_ALE_MODE|EXP_MEM_BUS_SIZE_8, 0x1A10201A, 0x03080403, 0x0000002},	/*BT8370*/
++	{1, (EXP_BUS_REG_BASE_CS4 >> 12), ((EXP_BUS_REG_BASE_CS4 + EXP_CS4_SEG_SIZE - 1) >> 12), EXP_NAND_MODE|EXP_MEM_BUS_SIZE_8, 0x02020001, 0x01010101, 0x02},	/* NAND: TODO Values to check */
++};
++
++/************************************************************************
++ *  Machine definition
++ *
++ ************************************************************************/
++static void __init platform_map_io(void)
++{
++	device_map_io();
++}
++
++static void __init platform_irq_init(void)
++{
++	device_irq_init();
++}
++
++static void __init platform_init(void)
++{
++	device_init();
++	board_gpio_init();
++
++#if defined(CONFIG_SPI_MSPD_LOW_SPEED) || defined(CONFIG_SPI_MSPD_HIGH_SPEED)
++	spi_register_board_info(comcerto_spi_board_info, ARRAY_SIZE(comcerto_spi_board_info));
++#endif
++	mac_addr_init(&comcerto_pfe_pdata);
++
++	platform_add_devices(comcerto_devices, ARRAY_SIZE(comcerto_devices));
++}
++
++MACHINE_START(COMCERTO, "Bitdefender BOXv2")
++	/* Mindspeed Technologies Inc. */
++	.atag_offset    = COMCERTO_AXI_DDR_BASE + 0x100,
++	.smp		= smp_ops(comcerto_smp_ops),
++	.reserve	= platform_reserve,
++	.map_io		= platform_map_io,
++	.init_irq	= platform_irq_init,
++	.init_machine	= platform_init,
++	.init_time		= comcerto_timer_init,
++#ifdef CONFIG_ZONE_DMA
++	.dma_zone_size	= SZ_32M + 3*SZ_4M,
++#endif
++	.restart	= ls1024_restart,
++	.reboot_mode	= REBOOT_SOFT,
++MACHINE_END
+diff --git a/arch/arm/mach-comcerto/clock.c b/arch/arm/mach-comcerto/clock.c
+index acbd2f0..c192cbb 100644
+--- a/arch/arm/mach-comcerto/clock.c
++++ b/arch/arm/mach-comcerto/clock.c
+@@ -1012,6 +1012,13 @@ static int __init clk_disable_unused(void)
+ 		if ( strcmp(clk->name, "hfe_core") &&
+ 				strcmp(clk->name, "ipsec_eape") &&
+ 				strcmp(clk->name, "pll3") &&
++#ifdef CONFIG_BOXV2
++				/* on BOXv2 we need Ethernet PHY chip (Atheros AR8031) clock to be provided by LS1024A, so it shall not disable the clocks */
++				strcmp(clk->name, "ext_phy0") &&
++				strcmp(clk->name, "ext_phy1") &&
++				/* PLL2 is used for ext_phy0 and ext_phy1 */
++				strcmp(clk->name, "pll2") &&
++#endif
+ 				strcmp(clk->name, "arm_peri") )
+ 		{
+ 			pr_info("Clocks: disabled unused %s\n", clk->name);
+diff --git a/arch/arm/mach-comcerto/comcerto-2000.c b/arch/arm/mach-comcerto/comcerto-2000.c
+index 397cc12..2ece5c5 100644
+--- a/arch/arm/mach-comcerto/comcerto-2000.c
++++ b/arch/arm/mach-comcerto/comcerto-2000.c
+@@ -800,7 +800,7 @@ static struct resource comcerto_dwc_otg_resources[] = {
+ };
+ 
+ static struct platform_device comcerto_dwc_otg_device = {
+-	.name			= "dwc_otg",
++	.name			= "dwc2",
+ 	.resource		= comcerto_dwc_otg_resources,
+ 	.num_resources	= ARRAY_SIZE(comcerto_dwc_otg_resources),
+ 	.dev = {
+@@ -1043,12 +1043,18 @@ static struct platform_device *comcerto_common_devices[] __initdata = {
+ 	&comcerto_pmu,
+ 
+ #if defined(CONFIG_COMCERTO_USB3_SUPPORT)
++#ifndef CONFIG_BOXV2
++	/* on BOXv2 we will not allow USB3.0 - kernel makefiles are a bit stupid to not disallow USB3 seleciton */
+ 	&comcerto_device_usb3,
+ #endif
++#endif
+ 
+ #if defined(CONFIG_COMCERTO_USB2_SUPPORT)
++#ifdef CONFIG_BOXV2_USBEMMC
++	/* only enable USB when required */
+ 	&comcerto_dwc_otg_device,
+ #endif
++#endif
+ 
+ #if defined(CONFIG_COMCERTO_SATA)
+ 	&comcerto_device_ahci,
+diff --git a/arch/arm/mach-comcerto/include/mach/board-boxv2.h b/arch/arm/mach-comcerto/include/mach/board-boxv2.h
+new file mode 100644
+index 0000000..e9cd505
+--- /dev/null
++++ b/arch/arm/mach-comcerto/include/mach/board-boxv2.h
+@@ -0,0 +1,39 @@
++/*
++ * arch/arm/mach-comcerto/include/mach/board-boxv2.h
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License version 2 as
++ * published by the Free Software Foundation.
++ */
++
++#ifndef __BOARD_BOXV2_H__
++#define __BOARD_BOXV2_H__
++
++#include <mach/hardware.h>
++	
++	/***********************************
++	 * Expansion bus configuration
++	 ***********************************/
++	 
++	#define COMCERTO_EXPCLK		42000000	/* 42MHz */
++
++	/***********************************
++	 * GPIO
++	 ***********************************/
++	#define COMCERTO_OUTPUT_GPIO		(COMCERTO_NAND_CE)
++	#define COMCERTO_IRQ_RISING_EDGE_GPIO	0 // [FIXME]
++	#define COMCERTO_IRQ_FALLING_EDGE_GPIO	(GPIO_2 | GPIO_0) // [FIXME]
++	#define COMCERTO_IRQ_LEVEL_GPIO 	GPIO_2 // [FIXME]
++	/*Are pins used either as GPIO or as pins for others IP blocks*/
++	#define COMCERTO_GPIO_PIN_USAGE		(SPI_BUS) // [FIXME]
++
++	/***********************************
++	 * NAND
++	 ***********************************/
++	#define COMCERTO_EXP_CS4_SEG_SZ		1
++
++	#define COMCERTO_NAND_FIO_ADDR		EXP_CS4_AXI_BASEADDR
++	#define COMCERTO_NAND_BR		0x20000000 /* BR is on GPIO_29 */
++	#define COMCERTO_NAND_CE		0x10000000 /* CE is on GPIO_28 */
++	#define COMCERTO_NAND_IO_SZ		((COMCERTO_EXP_CS4_SEG_SZ << 12) +0x1000)
++#endif
+diff --git a/arch/arm/mach-comcerto/include/mach/comcerto-2000.h b/arch/arm/mach-comcerto/include/mach/comcerto-2000.h
+index e3bf8ba..9bd7885 100644
+--- a/arch/arm/mach-comcerto/include/mach/comcerto-2000.h
++++ b/arch/arm/mach-comcerto/include/mach/comcerto-2000.h
+@@ -262,6 +262,10 @@
+ #define comcerto_timer5_get()		__raw_readl(COMCERTO_TIMER5_CURRENT_COUNT)
+ 
+ /* Number of gemacs supported in comcerto 2000 */
++#ifdef CONFIG_BOXV2
++#define NUM_GEMAC_SUPPORT       2
++#else
+ #define NUM_GEMAC_SUPPORT	3
++#endif
+ 
+ #endif
+diff --git a/arch/arm/mach-comcerto/include/mach/comcerto-2000/gpio.h b/arch/arm/mach-comcerto/include/mach/comcerto-2000/gpio.h
+index 764b176..b0e80a3 100644
+--- a/arch/arm/mach-comcerto/include/mach/comcerto-2000/gpio.h
++++ b/arch/arm/mach-comcerto/include/mach/comcerto-2000/gpio.h
+@@ -278,9 +278,15 @@
+ #define SPI_MUX_BUS_2		(GPIO32_SPI_RXD)
+ #define SPI_MUX_GPIO_2_PIN	(GPIO_PIN_32)
+ 
++#ifdef CONFIG_BOXV2
++#define UART0_GPIO	(GPIO_8 | GPIO_9)
++#define UART0_BUS	(GPIO8_UART0_RX | GPIO9_UART0_TX)
++#define UART0_GPIO_PIN	(GPIO_PIN_8 | GPIO_PIN_9)
++#else
+ #define UART0_GPIO	(GPIO_8 | GPIO_9 | GPIO_10 | GPIO_11)
+ #define UART0_BUS	(GPIO8_UART0_RX | GPIO9_UART0_TX | GPIO10_UART0_RTS_N | GPIO11_UART0_CTS_N)
+ #define UART0_GPIO_PIN	(GPIO_PIN_8 | GPIO_PIN_9 | GPIO_PIN_10 | GPIO_PIN_11)
++#endif
+ 
+ #define PFE_UART_GPIO		(GPIO_12 | GPIO_13)
+ #define PFE_UART_BUS		(GPIO12_PFE_UART_RX | GPIO13_PFE_UART_TX)
+diff --git a/arch/arm/mach-comcerto/include/mach/hardware.h b/arch/arm/mach-comcerto/include/mach/hardware.h
+index 3099117..3c1e176 100644
+--- a/arch/arm/mach-comcerto/include/mach/hardware.h
++++ b/arch/arm/mach-comcerto/include/mach/hardware.h
+@@ -38,6 +38,8 @@
+ 		#include <mach/board-c2kevm.h>
+ 	#elif defined(CONFIG_C2K_MFCN_EVM)
+ 		#include <mach/board-c2kmfcnevm.h>
++	#elif defined(CONFIG_BOXV2)
++		#include <mach/board-boxv2.h>
+ 	#elif defined(CONFIG_RTSM_C2K)
+ 		#include <mach/board-c2krtsm.h>
+ 	
+diff --git a/arch/arm/mach-comcerto/include/mach/reset.h b/arch/arm/mach-comcerto/include/mach/reset.h
+index bfc9f8d..d892581 100644
+--- a/arch/arm/mach-comcerto/include/mach/reset.h
++++ b/arch/arm/mach-comcerto/include/mach/reset.h
+@@ -130,4 +130,19 @@ typedef enum {
+ 
+ void GPIO_reset_external_device(int block,int state);
+ #endif
++
++#if defined(CONFIG_BOXV2)
++/* C2000 device blocks which are to be put
++ * in out of reset(GPIO).
++ */
++typedef enum {
++        COMPONENT_PCIE0=0,
++        COMPONENT_PCIE1,
++        COMPONENT_USB_HUB,
++        COMPONENT_RGMII0,
++        COMPONENT_RGMII1
++}C2000_GEN2_GPIO_RESET_COMPONENT;
++
++void GPIO_reset_external_device(int block,int state);
++#endif
+ #endif
+diff --git a/arch/arm/mach-comcerto/include/mach/serdes-c2000.h b/arch/arm/mach-comcerto/include/mach/serdes-c2000.h
+index 8af88ba2eb2..d94679dddb4 100644
+--- a/arch/arm/mach-comcerto/include/mach/serdes-c2000.h
++++ b/arch/arm/mach-comcerto/include/mach/serdes-c2000.h
+@@ -27,6 +27,8 @@
+  */
+ /* SER-DES Address space */
+ 
++/* enable or disable PCIe spread spectrum clock */
++#undef BOREA_PCIE_SSC
+ 
+ typedef struct serdes_regs_s
+ {
+@@ -1673,15 +1675,29 @@ static struct serdes_regs_s pcie_phy_reg_file_24[] =
+ 	  /* Common CMU block */
+   	  { 0x000 << 2, 0x06},
+   	  { 0x001 << 2, 0x00},
++#ifdef BOREA_PCIE_SSC
++	  { 0x002 << 2, 0x0d}, // Switch on SSC. Output clock is enabled
++#else
+   	  { 0x002 << 2, 0x09}, //
++#endif
+  	  { 0x003 << 2, 0x00},
+  	  { 0x004 << 2, 0x60}, //
+  	  { 0x005 << 2, 0x09}, //
++#ifdef BOREA_PCIE_SSC
++	  { 0x006 << 2, 0x7e}, // Change for SSC
++	  { 0x007 << 2, 0xff}, // Change for SSC
++	  { 0x008 << 2, 0x03}, // Change for SSC
++#else
+  	  { 0x006 << 2, 0x0e}, //
+  	  { 0x007 << 2, 0x00},
+  	  { 0x008 << 2, 0x00},
++#endif
+  	  { 0x009 << 2, 0x00},
++#ifdef BOREA_PCIE_SSC
++ 	  { 0x00A << 2, 0x05}, // Change for SSC
++#else
+  	  { 0x00A << 2, 0x00},
++#endif
+  	  { 0x00B << 2, 0x00},
+  	  { 0x00C << 2, 0x00},
+  	  { 0x00D << 2, 0x00},
+diff --git a/arch/arm/mach-comcerto/pcie-c2000.c b/arch/arm/mach-comcerto/pcie-c2000.c
+index b63f7a5..1dd9212 100644
+--- a/arch/arm/mach-comcerto/pcie-c2000.c
++++ b/arch/arm/mach-comcerto/pcie-c2000.c
+@@ -136,8 +136,13 @@ struct pcie_app_reg app_regs[MAX_PCIE_PORTS] = {
+ 	}
+ };
+ 
++#ifdef CONFIG_BOXV2
++/* Keeping all DDR area of 1G accesible for inbound transaction */
++#define INBOUND_ADDR_MASK	0x3FFFFFFF
++#else
+ /* Keeping all DDR area of 512MB accesible for inbound transaction */
+ #define INBOUND_ADDR_MASK	0x1FFFFFFF
++#endif
+ 
+ 
+ #define PCIE_SETUP_iATU_IB_ENTRY( _pp, _view_port, _base, _limit, _ctl1, _ctl2, _target ) \
+@@ -1774,7 +1779,7 @@ static int comcerto_pcie_bsp_link_init(struct pcie_port *pp, int nr, struct serd
+ 
+ 	mdelay(1); //After CMU locks wait for sometime
+ 
+-#if defined(CONFIG_C2K_MFCN_EVM)
++#if defined(CONFIG_C2K_MFCN_EVM) || defined(CONFIG_BOXV2)
+ 	if(nr == 0){
+ 		GPIO_reset_external_device(COMPONENT_PCIE0,0);
+ 	}else{
+diff --git a/arch/arm/mach-comcerto/reset.c b/arch/arm/mach-comcerto/reset.c
+index 72e79d6..79af8b7 100644
+--- a/arch/arm/mach-comcerto/reset.c
++++ b/arch/arm/mach-comcerto/reset.c
+@@ -544,6 +544,130 @@ void GPIO_reset_external_device(int block,int state)
+ EXPORT_SYMBOL(GPIO_reset_external_device);
+ #endif
+ 
++#if defined(CONFIG_BOXV2)
++void GPIO_reset_external_device(int block,int state)
++{
++	unsigned long flags;
++	spin_lock_irqsave(&gpio_lock, flags);
++
++	/* Blocks to be put in out of Reset and reset mode
++	 * 0 ----> out of reset
++	 * 1 ----> reset
++	 */
++	switch (block){
++		case COMPONENT_PCIE0:
++			if (state){
++                /* Wifi 5G DISABLE */
++                writel(readl(COMCERTO_GPIO_63_32_PIN_OUTPUT) & ~GPIO_PIN_57, COMCERTO_GPIO_63_32_PIN_OUTPUT);
++                writel( readl(COMCERTO_GPIO_63_32_PIN_OUTPUT_EN) | GPIO_PIN_57, COMCERTO_GPIO_63_32_PIN_OUTPUT_EN);
++                writel(readl(COMCERTO_GPIO_63_32_PIN_SELECT) & ~GPIO_PIN_57, COMCERTO_GPIO_63_32_PIN_SELECT);
++				/* Wifi 5G RST */
++				writel(readl(COMCERTO_GPIO_63_32_PIN_OUTPUT) & ~GPIO_PIN_59, COMCERTO_GPIO_63_32_PIN_OUTPUT);
++				writel( readl(COMCERTO_GPIO_63_32_PIN_OUTPUT_EN) | GPIO_PIN_59, COMCERTO_GPIO_63_32_PIN_OUTPUT_EN);
++				writel(readl(COMCERTO_GPIO_63_32_PIN_SELECT) & ~GPIO_PIN_59, COMCERTO_GPIO_63_32_PIN_SELECT);
++                /* Wifi 5G PERST */
++				writel(readl(COMCERTO_GPIO_63_32_PIN_OUTPUT) & ~GPIO_PIN_58, COMCERTO_GPIO_63_32_PIN_OUTPUT);
++                writel( readl(COMCERTO_GPIO_63_32_PIN_OUTPUT_EN) | GPIO_PIN_58, COMCERTO_GPIO_63_32_PIN_OUTPUT_EN);
++                writel(readl(COMCERTO_GPIO_63_32_PIN_SELECT) & ~GPIO_PIN_58, COMCERTO_GPIO_63_32_PIN_SELECT);
++
++			}else{
++                /* Wifi 5G DISABLE */
++                writel(readl(COMCERTO_GPIO_63_32_PIN_OUTPUT) & ~GPIO_PIN_57, COMCERTO_GPIO_63_32_PIN_OUTPUT);
++                writel( readl(COMCERTO_GPIO_63_32_PIN_OUTPUT_EN) & ~GPIO_PIN_57, COMCERTO_GPIO_63_32_PIN_OUTPUT_EN);
++                writel(readl(COMCERTO_GPIO_63_32_PIN_OUTPUT) | GPIO_PIN_57, COMCERTO_GPIO_63_32_PIN_OUTPUT);
++                writel(readl(COMCERTO_GPIO_63_32_PIN_SELECT) | GPIO_PIN_57, COMCERTO_GPIO_63_32_PIN_SELECT);
++				/* Wifi 5G RST */
++				writel(readl(COMCERTO_GPIO_63_32_PIN_OUTPUT) & ~GPIO_PIN_59, COMCERTO_GPIO_63_32_PIN_OUTPUT);
++				writel( readl(COMCERTO_GPIO_63_32_PIN_OUTPUT_EN) & ~GPIO_PIN_59, COMCERTO_GPIO_63_32_PIN_OUTPUT_EN);
++				writel(readl(COMCERTO_GPIO_63_32_PIN_OUTPUT) | GPIO_PIN_59, COMCERTO_GPIO_63_32_PIN_OUTPUT);
++				writel(readl(COMCERTO_GPIO_63_32_PIN_SELECT) | GPIO_PIN_59, COMCERTO_GPIO_63_32_PIN_SELECT);
++				/* Wifi 5G PERST */
++                writel(readl(COMCERTO_GPIO_63_32_PIN_OUTPUT) & ~GPIO_PIN_58, COMCERTO_GPIO_63_32_PIN_OUTPUT);
++                writel( readl(COMCERTO_GPIO_63_32_PIN_OUTPUT_EN) & ~GPIO_PIN_58, COMCERTO_GPIO_63_32_PIN_OUTPUT_EN);
++                writel(readl(COMCERTO_GPIO_63_32_PIN_OUTPUT) | GPIO_PIN_58, COMCERTO_GPIO_63_32_PIN_OUTPUT);
++                writel(readl(COMCERTO_GPIO_63_32_PIN_SELECT) | GPIO_PIN_58, COMCERTO_GPIO_63_32_PIN_SELECT);
++			}
++			break;
++		case COMPONENT_PCIE1:
++			if (state){
++				/* Wifi 2,4G DISABLE */
++                writel(readl(COMCERTO_GPIO_63_32_PIN_OUTPUT) & ~GPIO_PIN_53, COMCERTO_GPIO_63_32_PIN_OUTPUT);
++                writel( readl(COMCERTO_GPIO_63_32_PIN_OUTPUT_EN) | GPIO_PIN_53, COMCERTO_GPIO_63_32_PIN_OUTPUT_EN);
++                writel(readl(COMCERTO_GPIO_63_32_PIN_SELECT) & ~GPIO_PIN_53, COMCERTO_GPIO_63_32_PIN_SELECT);
++				/* Wifi 2,4G RST */
++				writel(readl(COMCERTO_GPIO_63_32_PIN_OUTPUT) & ~GPIO_PIN_55, COMCERTO_GPIO_63_32_PIN_OUTPUT);
++				writel( readl(COMCERTO_GPIO_63_32_PIN_OUTPUT_EN) | GPIO_PIN_55, COMCERTO_GPIO_63_32_PIN_OUTPUT_EN);
++				writel(readl(COMCERTO_GPIO_63_32_PIN_SELECT) & ~GPIO_PIN_55, COMCERTO_GPIO_63_32_PIN_SELECT);
++				/* Wifi 2,4G PERST */
++                writel(readl(COMCERTO_GPIO_63_32_PIN_OUTPUT) & ~GPIO_PIN_54, COMCERTO_GPIO_63_32_PIN_OUTPUT);
++                writel( readl(COMCERTO_GPIO_63_32_PIN_OUTPUT_EN) | GPIO_PIN_54, COMCERTO_GPIO_63_32_PIN_OUTPUT_EN);
++                writel(readl(COMCERTO_GPIO_63_32_PIN_SELECT) & ~GPIO_PIN_54, COMCERTO_GPIO_63_32_PIN_SELECT);
++			}else{
++				/* Wifi 2,4G DISABLE */
++                writel(readl(COMCERTO_GPIO_63_32_PIN_OUTPUT) & ~GPIO_PIN_53, COMCERTO_GPIO_63_32_PIN_OUTPUT);
++                writel( readl(COMCERTO_GPIO_63_32_PIN_OUTPUT_EN) & ~GPIO_PIN_53, COMCERTO_GPIO_63_32_PIN_OUTPUT_EN);
++                writel(readl(COMCERTO_GPIO_63_32_PIN_OUTPUT) | GPIO_PIN_53, COMCERTO_GPIO_63_32_PIN_OUTPUT);
++                writel(readl(COMCERTO_GPIO_63_32_PIN_SELECT) | GPIO_PIN_53, COMCERTO_GPIO_63_32_PIN_SELECT);
++				/* Wifi 2,4G RST */
++                writel(readl(COMCERTO_GPIO_63_32_PIN_OUTPUT) & ~GPIO_PIN_55, COMCERTO_GPIO_63_32_PIN_OUTPUT);
++                writel( readl(COMCERTO_GPIO_63_32_PIN_OUTPUT_EN) & ~GPIO_PIN_55, COMCERTO_GPIO_63_32_PIN_OUTPUT_EN);
++                writel(readl(COMCERTO_GPIO_63_32_PIN_OUTPUT) | GPIO_PIN_55, COMCERTO_GPIO_63_32_PIN_OUTPUT);
++                writel(readl(COMCERTO_GPIO_63_32_PIN_SELECT) | GPIO_PIN_55, COMCERTO_GPIO_63_32_PIN_SELECT);
++				/* Wifi 2,4G PERST */
++				writel(readl(COMCERTO_GPIO_63_32_PIN_OUTPUT) & ~GPIO_PIN_54, COMCERTO_GPIO_63_32_PIN_OUTPUT);
++				writel( readl(COMCERTO_GPIO_63_32_PIN_OUTPUT_EN) & ~GPIO_PIN_54, COMCERTO_GPIO_63_32_PIN_OUTPUT_EN);
++				writel(readl(COMCERTO_GPIO_63_32_PIN_OUTPUT) | GPIO_PIN_54, COMCERTO_GPIO_63_32_PIN_OUTPUT);
++				writel(readl(COMCERTO_GPIO_63_32_PIN_SELECT) | GPIO_PIN_54, COMCERTO_GPIO_63_32_PIN_SELECT);
++			}
++			break;
++		case COMPONENT_USB_HUB:
++#ifdef CONFIG_BOXV2_USBEMMC
++/* we just leave USB in reset */
++			if (state){
++#endif
++				writel(readl(COMCERTO_GPIO_63_32_PIN_OUTPUT) & ~GPIO_PIN_50, COMCERTO_GPIO_63_32_PIN_OUTPUT);
++				writel( readl(COMCERTO_GPIO_63_32_PIN_OUTPUT_EN) | GPIO_PIN_50, COMCERTO_GPIO_63_32_PIN_OUTPUT_EN);
++				writel(readl(COMCERTO_GPIO_63_32_PIN_SELECT) & ~GPIO_PIN_50, COMCERTO_GPIO_63_32_PIN_SELECT);
++#ifdef CONFIG_BOXV2_USBEMMC
++			}else{
++				writel(readl(COMCERTO_GPIO_63_32_PIN_OUTPUT) & ~GPIO_PIN_50, COMCERTO_GPIO_63_32_PIN_OUTPUT);
++				writel( readl(COMCERTO_GPIO_63_32_PIN_OUTPUT_EN) & ~GPIO_PIN_50, COMCERTO_GPIO_63_32_PIN_OUTPUT_EN);
++				writel(readl(COMCERTO_GPIO_63_32_PIN_OUTPUT) | GPIO_PIN_50, COMCERTO_GPIO_63_32_PIN_OUTPUT);
++				writel(readl(COMCERTO_GPIO_63_32_PIN_SELECT) | GPIO_PIN_50, COMCERTO_GPIO_63_32_PIN_SELECT);
++			}
++#endif
++			break;
++		case COMPONENT_RGMII0:
++			if (state){
++				writel(readl(COMCERTO_GPIO_PIN_SELECT_REG) & ~((GPIO_PIN_10 << 10) || (GPIO_PIN_10 << 11)), COMCERTO_GPIO_PIN_SELECT_REG);
++				writel( readl(COMCERTO_GPIO_OE_REG) | GPIO_PIN_10, COMCERTO_GPIO_OE_REG);
++				writel(readl(COMCERTO_GPIO_OUTPUT_REG) & ~GPIO_PIN_10, COMCERTO_GPIO_OUTPUT_REG);
++			}else{
++				writel(readl(COMCERTO_GPIO_PIN_SELECT_REG) & ~((GPIO_PIN_10 << 10) || (GPIO_10 << 11)), COMCERTO_GPIO_PIN_SELECT_REG);
++				writel( readl(COMCERTO_GPIO_OE_REG) | GPIO_PIN_10, COMCERTO_GPIO_OE_REG);
++				writel(readl(COMCERTO_GPIO_OUTPUT_REG) | GPIO_PIN_10, COMCERTO_GPIO_OUTPUT_REG);
++			}
++			break;
++		case COMPONENT_RGMII1:
++			if (state){
++				writel(readl(COMCERTO_GPIO_PIN_SELECT_REG) & ~((GPIO_PIN_11 << 11) || (GPIO_PIN_11 << 12)), COMCERTO_GPIO_PIN_SELECT_REG);
++				writel( readl(COMCERTO_GPIO_OE_REG) | GPIO_PIN_11, COMCERTO_GPIO_OE_REG);
++				writel(readl(COMCERTO_GPIO_OUTPUT_REG) & ~GPIO_PIN_11, COMCERTO_GPIO_OUTPUT_REG);
++			}else{
++				writel(readl(COMCERTO_GPIO_PIN_SELECT_REG) & ~((GPIO_PIN_11 << 11) || (GPIO_PIN_11 << 12)), COMCERTO_GPIO_PIN_SELECT_REG);
++				writel( readl(COMCERTO_GPIO_OE_REG) | GPIO_PIN_11, COMCERTO_GPIO_OE_REG);
++				writel(readl(COMCERTO_GPIO_OUTPUT_REG) | GPIO_PIN_11, COMCERTO_GPIO_OUTPUT_REG);
++			}
++			break;
++		default:
++			break;
++	}
++
++	spin_unlock_irqrestore(&gpio_lock,flags);
++}
++EXPORT_SYMBOL(GPIO_reset_external_device);
++#endif
++
+ void reset_init(void)
+ {
+ 	spin_lock_init(&reset_lock);
+diff --git a/drivers/net/phy/atheros.c b/drivers/net/phy/atheros.c
+index ef238ca34a1..ddb88a088b4 100644
+--- a/drivers/net/phy/atheros.c
++++ b/drivers/net/phy/atheros.c
+@@ -64,7 +64,10 @@ int ar8x_add_skew(struct phy_device *phydev)
+ 	tmp |= AR8x_DBG_RGMII_TXCLK_MASK;
+ 	ar8x_phy_dbg_write(phydev, AR8x_DBG_RGMII_TXCLK_CTRL, tmp);
+ 
++#ifndef CONFIG_BOXV2
++	// solves bug 6315 and bug 6321
+ 	err = genphy_restart_aneg(phydev);
++#endif
+ 
+ 	if (err < 0)
+ 		return err;
+diff --git a/drivers/net/phy/phy_device.c b/drivers/net/phy/phy_device.c
+index 9de849d187c..841d4e85de4 100644
+--- a/drivers/net/phy/phy_device.c
++++ b/drivers/net/phy/phy_device.c
+@@ -764,11 +764,15 @@ static int genphy_config_advert(struct phy_device *phydev)
+ 	adv |= ethtool_adv_to_mii_adv_t(advertise);
+ 
+ 	if (adv != oldadv) {
++#ifndef CONFIG_BOXV2
++      		// solves bug 6315 and bug 6321
+ 		err = phy_write(phydev, MII_ADVERTISE, adv);
+ 
+ 		if (err < 0)
+ 			return err;
++#endif
+ 		changed = 1;
++
+ 	}
+ 
+ 	bmsr = phy_read(phydev, MII_BMSR);
+@@ -796,11 +800,12 @@ static int genphy_config_advert(struct phy_device *phydev)
+ 		if (adv != oldadv)
+ 			changed = 1;
+ 	}
+-
++#ifndef CONFIG_BOXV2
++        // solves bug 6315 and bug 6321
+ 	err = phy_write(phydev, MII_CTRL1000, adv);
+ 	if (err < 0)
+ 		return err;
+-
++#endif
+ 	return changed;
+ }
+ 
+@@ -885,9 +890,11 @@ int genphy_config_aneg(struct phy_device *phydev)
+ 	/* Only restart aneg if we are advertising something different
+ 	 * than we were before.
+ 	 */
++#ifndef CONFIG_BOXV2
++        // solves bug 6315 and bug 6321
+ 	if (result > 0)
+ 		result = genphy_restart_aneg(phydev);
+-
++#endif
+ 	return result;
+ }
+ EXPORT_SYMBOL(genphy_config_aneg);
+@@ -1085,12 +1092,16 @@ static int gen10g_read_status(struct phy_device *phydev)
+ int genphy_soft_reset(struct phy_device *phydev)
+ {
+ 	int ret;
+-
++#ifndef CONFIG_BOXV2
++        // solves bug 6315 and bug 6321
+ 	ret = phy_write(phydev, MII_BMCR, BMCR_RESET);
+ 	if (ret < 0)
+ 		return ret;
+ 
+ 	return phy_poll_reset(phydev);
++#else
++	return 0;
++#endif
+ }
+ EXPORT_SYMBOL(genphy_soft_reset);
+ 
+diff --git a/drivers/pci/msi.c b/drivers/pci/msi.c
+index 65e4431..7d3b751 100644
+--- a/drivers/pci/msi.c
++++ b/drivers/pci/msi.c
+@@ -903,7 +903,11 @@ void pci_msi_shutdown(struct pci_dev *dev)
+ 	if (!pci_msi_enable || !dev || !dev->msi_enabled)
+ 		return;
+ 
++#ifdef CONFIG_BOXV2
++	BUG_ON(list_empty(dev_to_msi_list(&dev->dev)));
++#else
+ 	BUG_ON(dev_to_msi_list(&dev->dev));
++#endif
+ 	desc = first_msi_entry(&dev->dev);
+ 
+ 	msi_set_enable(dev, 0);
+diff --git a/drivers/usb/dwc2/core.c b/drivers/usb/dwc2/core.c
+index 7605850b..75b0a6f 100644
+--- a/drivers/usb/dwc2/core.c
++++ b/drivers/usb/dwc2/core.c
+@@ -53,6 +53,10 @@
+ #include <linux/usb/hcd.h>
+ #include <linux/usb/ch11.h>
+ 
++#ifdef CONFIG_BOXV2
++#include <mach/reset.h>
++#endif
++
+ #include "core.h"
+ #include "hcd.h"
+ 
+@@ -762,6 +766,9 @@ void dwc2_core_host_init(struct dwc2_hsotg *hsotg)
+ 		if (!(hprt0 & HPRT0_PWR)) {
+ 			hprt0 |= HPRT0_PWR;
+ 			writel(hprt0, hsotg->regs + HPRT0);
++#ifdef CONFIG_BOXV2
++			GPIO_reset_external_device(COMPONENT_USB_HUB, 0);
++#endif
+ 		}
+ 	}
+ 
+diff --git a/drivers/usb/dwc2/platform.c b/drivers/usb/dwc2/platform.c
+index 6a795aa..be50562 100644
+--- a/drivers/usb/dwc2/platform.c
++++ b/drivers/usb/dwc2/platform.c
+@@ -45,9 +45,20 @@
+ 
+ #include <linux/usb/of.h>
+ 
++#ifdef CONFIG_BOXV2
++#include <mach/reset.h>
++#include <mach/hardware.h>
++#include <linux/clk.h>
++#include <mach/comcerto-2000/pm.h>
++#endif
++
+ #include "core.h"
+ #include "hcd.h"
+ 
++#ifdef CONFIG_BOXV2
++static struct clk *usb2_clk;
++#endif
++
+ static const char dwc2_driver_name[] = "dwc2";
+ 
+ static const struct dwc2_core_params params_bcm2835 = {
+@@ -136,6 +147,88 @@ static const struct of_device_id dwc2_of_match_table[] = {
+ };
+ MODULE_DEVICE_TABLE(of, dwc2_of_match_table);
+ 
++#ifdef CONFIG_BOXV2
++/**
++ * Platform specific initialization for USB 2 PHY
++ */
++static void comcerto_usb2_phy_init(void)
++{
++                uint32_t rd_data;
++
++#define COMCERTO_USB0_PHY_CTRL_REG0     (COMCERTO_DWC1_CFG_BASE + 0x000)
++#define COMCERTO_USB0_DWC_CFG_REGF              (USB2_PHY_BASE + 0x03C)
++
++
++                /* take device out of reset , enable clock. */
++                /* Programming the USB0 PHY CONTROL REGISTER */
++                /*      Bit[2]:usb0_vbusvldextsel - The internal Session Valid comparator is used.
++                 * Bit[3]:usb0_vbusvldext - The VBUS signal is not valid, and the pull-up resistor on D+ is disabled.
++                 * Bit[4]:usb0_otgdisable  - TThe OTG block is powered up.
++                 * Bit[17:16]:usb0_refclkdiv - Reference Clock Frequency Select, 48 MHz
++                 * Bit[21:20]:usb0_refclksel - The XO block uses an external, 2.5 V clock supplied on the XO pin.
++                 */
++                if(HAL_get_ref_clk() == REF_CLK_24MHZ)
++                        writel(0x00210000, COMCERTO_USB0_PHY_CTRL_REG0);  //24MHz ref clk
++                else
++                        writel(0x00220000, COMCERTO_USB0_PHY_CTRL_REG0);  //48MHz ref clk
++
++                /* Programming the IDSEL values to USB 2.0 Controller @ DWC_CFG_REGF register */
++                /* Configuring the usb2 controller to select the ID value from register */
++                rd_data = readl(COMCERTO_USB0_DWC_CFG_REGF);
++
++                /*      Bit[8]:usb0_id_sel - Selects from the register bit
++                 *      Bit[9]:usb1_id_sel - Selects from the register bit
++                 */
++                rd_data = ((rd_data & 0xFFFF11FF)| 0x00001100);  //For Host mode.
++                writel (rd_data, COMCERTO_USB0_DWC_CFG_REGF);
++
++
++                /* Programming USB2.0 controller with scale down value. */
++                /* Configuring the usb2 controller in scaledown disable mode */
++                rd_data = readl(COMCERTO_USB0_DWC_CFG_REGF);
++                rd_data = ((rd_data & 0xFFFFFFF0)| 0x0);
++                writel (rd_data, COMCERTO_USB0_DWC_CFG_REGF);
++}
++
++
++/**
++ * Platform specific initialization for Dwc OTG Controller
++ */
++static void comcerto_start_dwc_otg(void)
++{
++        /* Get the FAST-UART clk structure from DUS ,To be used for UART0/UART1 initilization */
++        usb2_clk = clk_get(NULL,"usb0");
++
++        /* Enable the Clock */
++        if (clk_enable(usb2_clk)){
++                pr_err("comcerto_start_dwc_otg:Unable to enable the usb2 clock \n");
++        }
++
++        /* USB 2.0 PHY Initialization */
++        comcerto_usb2_phy_init();
++
++        /* Continuing resets on usb2 controller+phy blocks */
++
++        /* APPLYING THE RESET TO USB2 UTMI */
++        c2000_block_reset(COMPONENT_UTMI_USB0, 1);
++
++        /* APPLYING THE RESET TO USB2 PHY */
++        c2000_block_reset(COMPONENT_USB0_PHY, 1);
++
++        /* APLLYING RESET TO USB2 AXI RESET */
++        c2000_block_reset(COMPONENT_AXI_USB0, 1);
++
++        /* Releasing the (POR) Power on Reset to usb2 nano phy block */
++        c2000_block_reset(COMPONENT_USB0_PHY, 0);
++
++        /* Releasing the UTMI Reset to usb2 controller block */
++        c2000_block_reset(COMPONENT_UTMI_USB0, 0);
++
++        /* Releasing the AHB Reset to usb2 controller block -- Bit[4]-USB3,Bit[3]-USB2 */
++        c2000_block_reset(COMPONENT_AXI_USB0, 0);
++}
++#endif
++
+ /**
+  * dwc2_driver_probe() - Called when the DWC_otg core is bound to the DWC_otg
+  * driver
+@@ -207,6 +300,11 @@ static int dwc2_driver_probe(struct platform_device *dev)
+ 	if (IS_ERR(hsotg->regs))
+ 		return PTR_ERR(hsotg->regs);
+ 
++#ifdef CONFIG_BOXV2
++        /* Platform Specific initialization */
++        comcerto_start_dwc_otg();
++#endif
++
+ 	dev_dbg(&dev->dev, "mapped PA %08lx to VA %p\n",
+ 		(unsigned long)res->start, hsotg->regs);
+ 

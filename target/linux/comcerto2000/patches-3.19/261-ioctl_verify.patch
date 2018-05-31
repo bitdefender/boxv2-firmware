@@ -1,0 +1,249 @@
+Index: linux-3.19.3/fs/binfmt_elf.c
+===================================================================
+--- linux-3.19.3.orig/fs/binfmt_elf.c
++++ linux-3.19.3/fs/binfmt_elf.c
+@@ -71,7 +71,7 @@ struct elf_sig_data {
+ 
+ static int load_elf_binary(struct linux_binprm *bprm);
+ static unsigned long elf_map(struct file *, unsigned long, struct elf_phdr *,
+-				int, int, unsigned long);
++				int, int, unsigned long, unsigned long *);
+ 
+ #ifdef CONFIG_USELIB
+ static int load_elf_library(struct file *);
+@@ -369,7 +369,7 @@ create_elf_tables(struct linux_binprm *b
+ 
+ static unsigned long elf_map(struct file *filep, unsigned long addr,
+ 		struct elf_phdr *eppnt, int prot, int type,
+-		unsigned long total_size)
++		unsigned long total_size, unsigned long *map_size)
+ {
+ 	unsigned long map_addr;
+ 	unsigned long size = eppnt->p_filesz + ELF_PAGEOFFSET(eppnt->p_vaddr);
+@@ -397,6 +397,9 @@ static unsigned long elf_map(struct file
+ 			vm_munmap(map_addr+size, total_size-size);
+ 	} else
+ 		map_addr = vm_mmap(filep, addr, size, prot, type, off);
++    
++	if (!BAD_ADDR(map_addr) && map_size)
++		*map_size = size;
+ 
+ 	return(map_addr);
+ }
+@@ -598,7 +601,7 @@ static unsigned long load_elf_interp(str
+ 			unsigned long k, map_addr;
+ 
+ 			if (eppnt->p_flags & PF_R)
+-		    		elf_prot = PROT_READ;
++				elf_prot = PROT_READ;
+ 			if (eppnt->p_flags & PF_W)
+ 				elf_prot |= PROT_WRITE;
+ 			if (eppnt->p_flags & PF_X)
+@@ -614,7 +617,7 @@ static unsigned long load_elf_interp(str
+ 				elf_type |= MAP_LOCKED;
+ 
+ 			map_addr = elf_map(interpreter, load_addr + vaddr,
+-					eppnt, elf_prot, elf_type, total_size);
++					eppnt, elf_prot, elf_type, total_size, NULL);
+ 			total_size = 0;
+ 			if (!*interp_map_addr)
+ 				*interp_map_addr = map_addr;
+@@ -1109,6 +1112,170 @@ static int elf_finalize_digest_verify_si
+ 	return 0;
+ }
+ 
++// verify_elf is duplicated from load_elf_interp, with some removed parts
++
++int verify_elf(struct file *filp)
++{
++	struct elfhdr elf_ex;
++	struct elf_phdr *elf_phdata = NULL, *eppnt;
++	unsigned long load_addr = 0;
++	bool load_addr_set = false;
++	unsigned long total_size;
++	struct elf_sig_data *esd = NULL;
++	bool first_signed_phdr = true;
++	int error = -EINVAL;
++	int i, ret;
++
++	/*
++	const char *name = "null";
++	if (filp->f_path.dentry && filp->f_path.dentry->d_name.name)
++		name = filp->f_path.dentry->d_name.name;
++
++	printk(KERN_ERR "verify_elf file:%s\n", name);
++	*/
++	
++	ret = kernel_read(filp, 0, (char *)&elf_ex, sizeof(elf_ex));
++	if (ret != sizeof(elf_ex))
++		goto out;
++
++	if (memcmp(elf_ex.e_ident, ELFMAG, SELFMAG) != 0)
++		goto out;
++
++	/* First of all, some simple consistency checks */
++	if (elf_ex.e_type != ET_EXEC &&
++		elf_ex.e_type != ET_DYN)
++		goto out;
++	if (!elf_check_arch(&elf_ex))
++		goto out;
++	if (!filp->f_op->mmap)
++		goto out;
++
++	elf_phdata = load_elf_phdrs(&elf_ex, filp);
++	if (!elf_phdata)
++		goto out;
++
++	total_size = total_mapping_size(elf_phdata, elf_ex.e_phnum);
++	if (!total_size) {
++		error = -EINVAL;
++		goto out;
++	}
++
++	esd = elf_parse_binary_signature(&elf_ex, filp);
++	if (!esd) {
++		error = -EINVAL;
++		goto out;
++	} else if (esd && IS_ERR(esd)) {
++		send_sig(SIGKILL, current, 0);
++
++		error = PTR_ERR(esd);
++		esd = NULL;
++
++		goto out;
++	}
++
++	eppnt = elf_phdata;
++	for (i = 0; i < elf_ex.e_phnum; i++, eppnt++) {
++		if (eppnt->p_type == PT_LOAD) {
++			int elf_type = MAP_PRIVATE | MAP_DENYWRITE;
++			int elf_prot = 0;
++			unsigned long map_addr;
++			unsigned long map_size;
++			unsigned long vaddr;
++			unsigned long k;
++
++			if (eppnt->p_flags & PF_R)
++				elf_prot = PROT_READ;
++			if (eppnt->p_flags & PF_W)
++				elf_prot |= PROT_WRITE;
++			if (eppnt->p_flags & PF_X)
++				elf_prot |= PROT_EXEC;
++			vaddr = eppnt->p_vaddr;
++			if (elf_ex.e_type == ET_EXEC || load_addr_set)
++				elf_type |= MAP_FIXED;
++			else
++				/* assume non-0 no_base (=load_bias) since
++				 * we are called after main elf
++				 */
++				if (/*no_base &&*/ elf_ex.e_type == ET_DYN)
++					load_addr = -vaddr;
++
++			/* no need to lock here, we are just verifying */
++			if (esd)
++				elf_type |= MAP_LOCKED;
++
++			map_addr = elf_map(filp, load_addr + vaddr,
++					eppnt, elf_prot, elf_type, total_size, &map_size);
++			total_size = 0;
++			if (BAD_ADDR(map_addr)) {
++				// test this with a size=0xffffffff or smth
++				error = PTR_ERR((void *)map_addr);
++				goto out;
++			}
++
++			if (!load_addr_set &&
++				elf_ex.e_type == ET_DYN) {
++				load_addr = map_addr - ELF_PAGESTART(vaddr);
++				load_addr_set = true;
++			}
++			
++			if (esd) {
++				/* Calculate digest of PT_LOAD segments */
++				elf_digest_phdr(&elf_ex, eppnt, esd, map_addr,
++						first_signed_phdr);
++				first_signed_phdr = false;
++			}
++			
++			vm_munmap(map_addr, map_size);
++
++			/*
++			 * Check to see if the section's size will overflow the
++			 * allowed task size. Note that p_filesz must always be
++			 * <= p_memsize so it's only necessary to check p_memsz.
++			 */
++			// xxx: nu se poate intampla sa fie load_addr=0 aici ?
++			k = load_addr + eppnt->p_vaddr;
++			if (BAD_ADDR(k) ||
++				eppnt->p_filesz > eppnt->p_memsz ||
++				eppnt->p_memsz > TASK_SIZE ||
++				TASK_SIZE - eppnt->p_memsz < k) {
++				error = -ENOMEM;
++				goto out;
++			}
++		}
++	}
++	
++	if (esd) {
++		/* Finalize digest and do signature verification */
++		error = elf_finalize_digest_verify_signature(esd);
++		printk(KERN_ERR "ioctl verify: ret=%d\n", error);
++
++		if (error)
++			send_sig(SIGKILL, current, 0);
++	}
++
++out:
++	if (elf_phdata) kfree(elf_phdata);
++	free_elf_sig_data(esd);
++	
++	return error;
++}
++
++int ioctl_verify(struct file *filp)
++{
++    /*
++    This should be:
++
++        error = verify_elf(filp);
++        if (BAD_ADDR(error))
++            send_sig(SIGKILL);
++
++    but we don't kill unsigned files yet.
++    */
++
++    return verify_elf(filp);
++}
++EXPORT_SYMBOL(ioctl_verify);
++
+ #else /* CONFIG_BINFMT_ELF_SIGNATURE */
+ static inline struct elf_sig_data *
+ elf_parse_binary_signature(struct elfhdr *ehdr, struct file *file)
+@@ -1419,7 +1586,7 @@ static int load_elf_binary(struct linux_
+ 		}
+ 
+ 		error = elf_map(bprm->file, load_bias + vaddr, elf_ppnt,
+-				elf_prot, elf_flags, 0);
++				elf_prot, elf_flags, 0, NULL);
+ 		if (BAD_ADDR(error)) {
+ 			retval = IS_ERR((void *)error) ?
+ 				PTR_ERR((void*)error) : -EINVAL;
+Index: linux-3.19.3/fs/ioctl.c
+===================================================================
+--- linux-3.19.3.orig/fs/ioctl.c
++++ linux-3.19.3/fs/ioctl.c
+@@ -581,6 +581,14 @@ int do_vfs_ioctl(struct file *filp, unsi
+ 			error = -ENOTTY;
+ 		break;
+ 
++#ifdef CONFIG_BINFMT_ELF_SIGNATURE
++	#define FIOVERIFY 0x545F
++
++	case FIOVERIFY:
++		error = ioctl_verify(filp);
++		break;
++#endif
++
+ 	case FIFREEZE:
+ 		error = ioctl_fsfreeze(filp);
+ 		break;

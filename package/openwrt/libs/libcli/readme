@@ -1,0 +1,18 @@
+SOURCE:This has been taken from barrier breaker packages 14.07 of revison 44441
+       Openwrt package repository for Chaos Calmer have the same package version as that BB
+URL:https://dev.openwrt.org/browser/branches/packages_14.07/libs/libcli?rev=44441
+SUPPORT : cli library.
+CHANGES:
+No Changes
+
+The Pkg version is same as Attitude_Adjustment
+AA Info:
+SOURCE : libcli 1.9.4 version package took from Openwrt Attitude Adjustment 12.09 packages base and SVN revision is 36089
+SOURCE PATH : https://dev.openwrt.org/browser/branches/packages_12.09/libs/libcli/?rev=36089
+
+CC Info:
+GIT LOG:
+commit 6c0569db46d8b53d0fd12b08c3cda70f691f0d60
+Author: nico <nico@3c298f89-4303-0410-b956-a3cf2f4a3e73>
+Date:   Sat Apr 18 23:46:37 2015 +0000
+Title: sctp: moved to github

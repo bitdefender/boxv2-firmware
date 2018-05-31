@@ -1,0 +1,60 @@
+#!/bin/sh /etc/rc.common
+# Copyright (C) 2008 OpenWrt.org
+
+start() {
+        if [ -e /proc/partno ]; then
+         if [ "`grep "M83262G" /proc/partno`" ] || [ "`grep "M83252G" /proc/partno`" ] || [ "`grep "M83242G" /proc/partno`" ]; then
+           exit 0
+         fi
+        fi
+	echo 8192000 > /sys/devices/platform/comcerto-tdm.0/clock_hz
+	echo 0 > /sys/devices/platform/comcerto-tdm.0/clock_output
+	echo 0x3FF > /sys/devices/platform/comcerto-tdm.0/fs_lwidth
+	echo 1 > /sys/devices/platform/comcerto-tdm.0/fs_hwidth
+	echo 1 > /sys/devices/platform/comcerto-tdm.0/fs_output
+	echo 0 > /sys/devices/platform/comcerto-tdm.0/fs_polarity
+
+	#Load pri and tempo modules
+	insmod ebus
+	insmod bt8370
+	insmod pri
+	insmod wan-pri
+	insmod tempo
+	
+	#Create nodes if not present
+	if [ ! -c /dev/sti ]
+		then mknod /dev/sti c 242 0
+	fi
+
+	if [ ! -c /dev/wan0 ]
+		then mknod /dev/wan0 c 125 0
+	fi
+
+	if [ ! -c /dev/pri ]
+		then mknod /dev/pri c 251 0
+	fi
+
+	if [ ! -c /dev/bt8370_0 ]
+		then mknod /dev/bt8370_0 c 124 0
+	fi
+
+	if [ ! -c /dev/bt847x ]
+		then mknod /dev/bt847x c 240 0
+	fi
+
+	#initialize framer so there is a valid clock on the TDM
+	bt8370_app -c
+}
+
+stop(){
+        if [ -e /proc/partno ]; then
+         if [ "`grep "M83262G" /proc/partno`" ] || [ "`grep "M83252G" /proc/partno`" ] || [ "`grep "M83242G" /proc/partno`" ]; then
+           exit 0
+         fi
+        fi
+	rmmod tempo
+	rmmod wan
+	rmmod pri
+	rmmod bt8370
+	rmmod ebus
+}

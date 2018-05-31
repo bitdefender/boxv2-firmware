@@ -1,0 +1,11 @@
+SOURCE : xl2tpd 1.3.1 version package took from Openwrt Attitude Adjustment 12.09 packages base and SVN revision is 36089
+SOURCE PATH : https://dev.openwrt.org/browser/branches/packages_12.09/net/xl2tpd/?rev=30689
+SUPPORT : L2TP
+
+FSL Changes
+
+(1)  Patch -> 111-FSL-cmm-notify.patch is used to notify CMM of a ppp interface that has come up. 
+   The notigfication is made when a SIGUSR2 signal is received by xl2tpd. This SIGUSR2 can be 
+   triggered by sending a "kill -12 ` cat /var/run/xl2tpd.pid`" whenever a pppol2tp interface comes up.
+
+(2) Makefile -> Altered to link to cmm library.

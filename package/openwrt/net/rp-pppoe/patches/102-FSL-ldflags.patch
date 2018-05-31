@@ -1,0 +1,41 @@
+diff -ruN rp-pppoe-3.8-orig/src/Makefile.in rp-pppoe-3.8/src/Makefile.in
+--- rp-pppoe-3.8-orig/src/Makefile.in	2010-05-14 15:06:08.000719000 +0530
++++ rp-pppoe-3.8/src/Makefile.in	2010-05-14 15:08:15.000024000 +0530
+@@ -59,6 +59,7 @@
+ 	'-DPPPOE_SERVER_OPTIONS="$(PPPOESERVER_PPPD_OPTIONS)"'
+ 
+ CFLAGS= @CFLAGS@ $(LIC_INCDIR) $(DEFINES) $(LIC_DEFINE) $(PATHS) -Ilibevent
++LDFLAGS= @LDFLAGS@
+ TARGETS=@TARGETS@
+ PPPOE_SERVER_LIBS=$(LIC_LIBDIR) $(LIC_LIB)
+ 
+@@ -67,16 +68,16 @@
+ 	@echo "Type 'make install' as root to install the software."
+ 
+ pppoe-sniff: pppoe-sniff.o if.o common.o debug.o
+-	@CC@ -o pppoe-sniff pppoe-sniff.o if.o common.o debug.o
++	@CC@ $(LDFLAGS) -o pppoe-sniff pppoe-sniff.o if.o common.o debug.o
+ 
+ pppoe-server: pppoe-server.o if.o debug.o common.o md5.o libevent/libevent.a @PPPOE_SERVER_DEPS@
+-	@CC@ -o pppoe-server @RDYNAMIC@ pppoe-server.o if.o debug.o common.o md5.o $(PPPOE_SERVER_LIBS) -Llibevent -levent
++	@CC@ $(LDFLAGS) -o pppoe-server @RDYNAMIC@ pppoe-server.o if.o debug.o common.o md5.o $(PPPOE_SERVER_LIBS) -Llibevent -levent
+ 
+ pppoe: pppoe.o if.o debug.o common.o ppp.o discovery.o
+-	@CC@ -o pppoe pppoe.o if.o debug.o common.o ppp.o discovery.o
++	@CC@ $(LDFLAGS) -o pppoe pppoe.o if.o debug.o common.o ppp.o discovery.o
+ 
+ pppoe-relay: relay.o if.o debug.o common.o
+-	@CC@ -o pppoe-relay relay.o if.o debug.o common.o
++	@CC@ $(LDFLAGS) -o pppoe-relay relay.o if.o debug.o common.o
+ 
+ pppoe.o: pppoe.c pppoe.h
+ 	@CC@ $(CFLAGS) '-DVERSION="$(VERSION)"' -c -o pppoe.o pppoe.c
+@@ -113,7 +114,7 @@
+ 
+ # Linux-specific plugin
+ rp-pppoe.so: plugin/libplugin.a plugin/plugin.o
+-	@CC@ -o rp-pppoe.so -shared plugin/plugin.o plugin/libplugin.a
++	@CC@ $(LDFLAGS) -o rp-pppoe.so -shared plugin/plugin.o plugin/libplugin.a
+ 
+ plugin/plugin.o: plugin.c
+ 	@CC@ '-DRP_VERSION="$(VERSION)"' $(CFLAGS) -I$(PPPD_INCDIR) -c -o plugin/plugin.o -fPIC plugin.c

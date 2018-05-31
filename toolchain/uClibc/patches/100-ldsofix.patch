@@ -1,0 +1,119 @@
+Index: uClibc-ng-1.0.22/ldso/ldso/dl-elf.c
+===================================================================
+--- uClibc-ng-1.0.22.orig/ldso/ldso/dl-elf.c
++++ uClibc-ng-1.0.22/ldso/ldso/dl-elf.c
+@@ -555,8 +555,16 @@ struct elf_resolve *_dl_load_elf_shared_
+ 		_dl_close(infile);
+ 		return NULL;
+ 	}
+-	header = _dl_mmap((void *) 0, _dl_pagesize, PROT_READ | PROT_WRITE,
+-			MAP_PRIVATE | MAP_ANONYMOUS | MAP_UNINITIALIZED, -1, 0);
++	/*
++	 * BUGFIX: the original code assumes that program and section headers are located
++	 *         immediatelly after the ELF header. For binaries that have been modified
++	 *         by patchelf this is not the case - program/section headers are moved to
++	 *         the end of the file. Thus we need to mmap() the entire file to make sure
++	 *         we don't dereference too much when iterating over them.
++	 *
++	 *         -- ileonte, 07.08.2017
++	 */
++	header = _dl_mmap((void *) 0, st.st_size, PROT_READ | PROT_WRITE, MAP_PRIVATE, infile, 0);
+ 	if (_dl_mmap_check_error(header)) {
+ 		_dl_dprintf(2, "%s:%i: can't map '%s'\n", _dl_progname, __LINE__, libname);
+ 		_dl_internal_error_number = LD_ERROR_MMAP_FAILED;
+@@ -564,7 +572,7 @@ struct elf_resolve *_dl_load_elf_shared_
+ 		return NULL;
+ 	}
+ 
+-	_dl_read(infile, header, _dl_pagesize);
++	// _dl_read(infile, header, st.st_size);
+ 	epnt = (ElfW(Ehdr) *) (intptr_t) header;
+ 	p32 = (uint32_t*)&epnt->e_ident;
+ 	if (*p32 != ELFMAG_U32) {
+@@ -572,7 +580,7 @@ struct elf_resolve *_dl_load_elf_shared_
+ 				libname);
+ 		_dl_internal_error_number = LD_ERROR_NOTELF;
+ 		_dl_close(infile);
+-		_dl_munmap(header, _dl_pagesize);
++		_dl_munmap(header, st.st_size);
+ 		return NULL;
+ 	}
+ 
+@@ -591,7 +599,7 @@ struct elf_resolve *_dl_load_elf_shared_
+ 		_dl_dprintf(2, "%s: '%s' is not an ELF executable for " ELF_TARGET
+ 				"\n", _dl_progname, libname);
+ 		_dl_close(infile);
+-		_dl_munmap(header, _dl_pagesize);
++		_dl_munmap(header, st.st_size);
+ 		return NULL;
+ 	}
+ 
+@@ -638,7 +646,7 @@ struct elf_resolve *_dl_load_elf_shared_
+ 				_dl_progname, libname);
+ 			_dl_internal_error_number = LD_ERROR_TLS_FAILED;
+ 			_dl_close(infile);
+-			_dl_munmap(header, _dl_pagesize);
++			_dl_munmap(header, st.st_size);
+ 			return NULL;
+ #endif
+ 		}
+@@ -665,7 +673,7 @@ struct elf_resolve *_dl_load_elf_shared_
+ 			_dl_dprintf(2, "%s:%i: can't map '%s'\n", _dl_progname, __LINE__, libname);
+ 			_dl_internal_error_number = LD_ERROR_MMAP_FAILED;
+ 			_dl_close(infile);
+-			_dl_munmap(header, _dl_pagesize);
++			_dl_munmap(header, st.st_size);
+ 			return NULL;
+ 		}
+ 		libaddr = (unsigned long) status;
+@@ -755,7 +763,7 @@ struct elf_resolve *_dl_load_elf_shared_
+ 		_dl_internal_error_number = LD_ERROR_NODYNAMIC;
+ 		_dl_dprintf(2, "%s: '%s' is missing a dynamic section\n",
+ 				_dl_progname, libname);
+-		_dl_munmap(header, _dl_pagesize);
++		_dl_munmap(header, st.st_size);
+ 		_dl_close(infile);
+ 		return NULL;
+ 	}
+@@ -980,7 +988,7 @@ struct elf_resolve *_dl_load_elf_shared_
+ 	_dl_if_debug_dprint("\t\t  entry: %x  phdr: %x  phnum: %x\n\n",
+ 			DL_RELOC_ADDR(lib_loadaddr, epnt->e_entry), tpnt->ppnt, tpnt->n_phent);
+ 
+-	_dl_munmap(header, _dl_pagesize);
++	_dl_munmap(header, st.st_size);
+ 
+ 	return tpnt;
+ }
+Index: uClibc-ng-1.0.22/ldso/ldso/ldso.c
+===================================================================
+--- uClibc-ng-1.0.22.orig/ldso/ldso/ldso.c
++++ uClibc-ng-1.0.22/ldso/ldso/ldso.c
+@@ -259,6 +259,8 @@ static void *_dl_zalloc(size_t size)
+ 	void *p = _dl_malloc(size);
+ 	if (p)
+ 		_dl_memset(p, 0, size);
++	else
++		_dl_exit(1);
+ 	return p;
+ }
+ 
+@@ -671,9 +673,10 @@ of this helper program; chances are you
+ 			_dl_debug_early("calling mprotect on the application program\n");
+ 			/* Now cover the application program. */
+ 			if (app_tpnt->dynamic_info[DT_TEXTREL]) {
++				int j;
+ 				ElfW(Phdr) *ppnt_outer = ppnt;
+ 				ppnt = (ElfW(Phdr) *) auxvt[AT_PHDR].a_un.a_val;
+-				for (i = 0; i < auxvt[AT_PHNUM].a_un.a_val; i++, ppnt++) {
++				for (j = 0; j < auxvt[AT_PHNUM].a_un.a_val; j++, ppnt++) {
+ 					if (ppnt->p_type == PT_LOAD && !(ppnt->p_flags & PF_W))
+ 						_dl_mprotect((void *) (DL_RELOC_ADDR(app_tpnt->loadaddr, ppnt->p_vaddr) & PAGE_ALIGN),
+ 							     (DL_RELOC_ADDR(app_tpnt->loadaddr, ppnt->p_vaddr) & ADDR_ALIGN) +
+@@ -1363,6 +1366,7 @@ of this helper program; chances are you
+ 		*_dl_envp = (unsigned long) envp;
+ 
+ #ifndef __FORCE_SHAREABLE_TEXT_SEGMENTS__
++// #if 0
+ 	{
+ 		unsigned int j;
+ 		ElfW(Phdr) *myppnt;

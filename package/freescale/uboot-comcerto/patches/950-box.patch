@@ -1,0 +1,2298 @@
+diff --git a/.gitignore b/.gitignore
+index a163728..5a5afa5 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -6,6 +6,20 @@
+ # Normal rules
+ #
+ 
++# BOX specific stuff
++
++/tools/ImageGenarator/c2k_image_gen
++/final_uloader.bin
++/final_uloader.bin.h
++/production_ubi.img.gz
++/production_ubi.img.gz.h
++/public.raw
++/public.raw.h
++
++/mkhdr/hdr.0
++/mkhdr/hdr.1
++/mkhdr/mkhdr
++
+ *.rej
+ *.orig
+ *.a
+diff --git a/Makefile b/Makefile
+index f4a4289..60ed82c 100644
+--- a/Makefile
++++ b/Makefile
+@@ -359,6 +359,23 @@ LIBS-y += arch/$(ARCH)/cpu/tegra-common/libcputegra-common.o
+ LIBS-y += $(CPUDIR)/tegra-common/libtegra-common.o
+ endif
+ 
++ifeq ($(CONFIG_PRODUCTION),y)
++
++XXD_H_FILES += production_ubi.img.gz.h
++XXD_H_FILES += final_uloader.bin.h
++XXD_H_FILES += public.raw.h
++
++production_ubi.img.gz.h: production_ubi.img.gz
++	xxd -i $^ $@
++
++final_uloader.bin.h: final_uloader.bin
++	xxd -i $^ $@
++
++public.raw.h: public.raw
++	xxd -i $^ $@
++
++endif
++
+ LIBS := $(addprefix $(obj),$(sort $(LIBS-y)))
+ .PHONY : $(LIBS)
+ 
+@@ -426,7 +443,7 @@ ALL-y += $(obj)u-boot-nodtb-tegra.bin
+ endif
+ endif
+ 
+-all:		$(ALL-y) $(SUBDIR_EXAMPLES)
++all:	$(XXD_H_FILES) $(ALL-y) $(SUBDIR_EXAMPLES)
+ 
+ $(obj)u-boot.dtb:	$(obj)u-boot
+ 		$(MAKE) -C dts binary
+@@ -446,9 +463,9 @@ $(obj)u-boot.bin:	$(obj)u-boot
+ 		$(BOARD_SIZE_CHECK)
+ 
+ $(obj)u-boot_secureboot:
+-		$(shell cp u-boot.bin u-boot-nonsecureboot.bin;)
+-		$(shell cp u-boot.bin ./tools/ImageGenarator/.; cd $(SRCTREE)/tools/ImageGenarator/; \
+-		 chmod 755 *.sh; ./uboot_gen.sh 1>/dev/null;)
++		+cp u-boot.bin u-boot-nonsecureboot.bin
++		+cp u-boot.bin ./tools/ImageGenarator/
++		(cd $(SRCTREE)/tools/ImageGenarator/; chmod 755 *.sh; ./uboot_gen.sh)
+ 
+ $(obj)u-boot.ldr:	$(obj)u-boot
+ 		$(CREATE_LDR_ENV)
+diff --git a/arch/arm/cpu/armv7/comcerto/emac.c b/arch/arm/cpu/armv7/comcerto/emac.c
+index 3a41854..bd83fec 100644
+--- a/arch/arm/cpu/armv7/comcerto/emac.c
++++ b/arch/arm/cpu/armv7/comcerto/emac.c
+@@ -2,6 +2,9 @@
+ #include <linux/types.h>
+ #include <asm/u-boot.h>
+ 
++#include <common.h>
++#include <net.h>
++#include <netdev.h>
+ 
+ /*
+  * Initializes on-chip ethernet controllers.
+@@ -12,4 +15,6 @@ int cpu_eth_init(bd_t *bis)
+ 	/* ensure that the module is out of reset */
+ 	c2000_gemac_initialize(bis, 0, "c2000_gemac0");
+ 	/* TODO Add support to gemac ports 1 & 2 */
++
++    return 0;
+ }
+diff --git a/arch/arm/cpu/armv7/comcerto/image.c b/arch/arm/cpu/armv7/comcerto/image.c
+index 3157af0..7c7b600 100644
+--- a/arch/arm/cpu/armv7/comcerto/image.c
++++ b/arch/arm/cpu/armv7/comcerto/image.c
+@@ -72,10 +72,10 @@ void * verify_and_authenticate_boot_image(u8 *image_buf)
+ 	ibr_wrapper_init();
+ 
+ #ifndef CONFIG_SECUREBOOT_TEST
+-        if (ibr_wrapper_secureboot_init() != RETCODE_OK) {
+-                printf ("secureboot init failed\n");
+-                return NULL;
+-        }
++	if (ibr_wrapper_secureboot_init() != RETCODE_OK) {
++		printf ("secureboot init failed\n");
++		return NULL;
++	}
+ 
+ 	printf("Is secure boot on?\r\n");
+ 	/* Find out if secure boot is on */
+@@ -114,6 +114,7 @@ void * verify_and_authenticate_boot_image(u8 *image_buf)
+ 	hash_type = (hash_algo)boot_hdr->hash_type;
+ 
+ 	/* Initialize SPAcc */
++    
+ 	ibr_wrapper_spacc_init();
+ 
+ 	//printf("Verify Image Header Entry\r\n");
+@@ -199,7 +200,7 @@ void * verify_and_authenticate_boot_image(u8 *image_buf)
+ 		/* fetch public hash stored in OTP */
+ 		ret = ibr_wrapper_secureboot_get_hash_key(&stored_hash[0]);
+ 		if (!ret) {
+-			printf("Fetching hash failed \n");
++			printf("Fetching hash key failed \n");
+ 			return NULL;
+ 		}
+ 
+@@ -213,8 +214,22 @@ void * verify_and_authenticate_boot_image(u8 *image_buf)
+ 		if (ibr_wrapper_secureboot_get_auth_mode()) {
+ 			ret = ibr_wrapper_secureboot_get_key(pub_key);
+ 			if (!ret) {
+-				printf("Fetching hash failed \n");
+-				return NULL;
++				if (pub_key_length > 0x100) {
++					printf("Reading 4K keys via otp_read not implemented.\n");
++					return NULL;
++				}
++
++				printf("Reading pubkey via otp_read.\n");
++
++				// otp_read() ignores our offset (4). We'll shift data back below.
++
++				ret = ibr_wrapper_otp_read(0, pub_key, pub_key_length + 4);
++				if (ret) {
++					printf("OTP read failed: %d\n", ret);
++					return NULL;
++				}
++
++				memmove(pub_key, pub_key+4, pub_key_length);
+ 			}
+ 		}
+ 	}
+@@ -226,6 +241,7 @@ void * verify_and_authenticate_boot_image(u8 *image_buf)
+ 
+ 	if (hash_type == null_hash) {
+ 		memcpy(image_buf,payload,boot_hdr->image_len);
++		printf("Image has NULL authentication\n");
+ 		return image_buf;
+ 	}
+ 
+@@ -237,6 +253,7 @@ void * verify_and_authenticate_boot_image(u8 *image_buf)
+ 
+ 	if ( (hash_type == rsa_sha256) || (hash_type == aes_rsa_sha256)) {
+ 		/* Initialize PKA */
++
+ 		ibr_wrapper_pka_init();
+ 
+ 		/*
+@@ -271,7 +288,7 @@ void * verify_and_authenticate_boot_image(u8 *image_buf)
+ #ifndef CONFIG_SECUREBOOT_TEST
+ 		ret = secureboot_get_aes_key(aes_key,aes_key_length);
+ 		if (!ret) {
+-			printf("Fetching hash failed \n");
++			printf("Fetching aes key failed \n");
+ 			return NULL;
+ 		}
+ #else
+diff --git a/arch/arm/cpu/armv7/comcerto/pad_config.c b/arch/arm/cpu/armv7/comcerto/pad_config.c
+index 3d2b2c5..42a463c 100644
+--- a/arch/arm/cpu/armv7/comcerto/pad_config.c
++++ b/arch/arm/cpu/armv7/comcerto/pad_config.c
+@@ -5,6 +5,8 @@
+ #include <asm/arch/ddr.h>
+ #include <asm/arch/gpio.h>
+ 
++#include <asm/arch-comcerto/comcerto-2000-fns.h>
++
+ #define CONFIG_GEM_RGMII_2_5V
+ //#define CONFIG_GEM_RGMII_3_3V
+ #define CONFIG_HFE_OVERDRIVE
+diff --git a/arch/arm/cpu/armv7/comcerto/secureboot_config.c b/arch/arm/cpu/armv7/comcerto/secureboot_config.c
+index 4af5456..e741d9f 100644
+--- a/arch/arm/cpu/armv7/comcerto/secureboot_config.c
++++ b/arch/arm/cpu/armv7/comcerto/secureboot_config.c
+@@ -141,6 +141,8 @@ static void do_c2k_key_read(char *byte_offset_s, char *read_data_s, char *key_le
+ 		no_bytes = AES_128_KEY_LENGTH;
+ 	} else if (key_size == 256) {
+ 		no_bytes = AES_256_KEY_LENGTH;
++	} else if (key_size > 1000) {
++		no_bytes = key_size - 1000;
+ 	} else {
+ 		printf ("c2k_key_write: key size is incorrect\n");
+ 		return;
+@@ -285,6 +287,7 @@ static int do_c2k_publickey(cmd_tbl_t *cmdtp, int flag, int argc, char * const a
+ 	return 0;
+ }
+ 
++// the handler for this cmd was not tested (min argc=0 below but argv[0]=cmdname is always passed)
+ U_BOOT_CMD(
+ 	c2k_publickey,   2,      0,      do_c2k_publickey,
+ 	"c2k_publickey <public key offset in ddr> <public key length in bytes",
+@@ -359,6 +362,7 @@ static int do_c2k_aeskey(cmd_tbl_t *cmdtp, int flag, int argc, char * const argv
+ 	return 0;
+ }
+ 
++// the handler for this cmd was not tested (min argc=0 below but argv[0]=cmdname is always passed)
+ U_BOOT_CMD(
+ 	c2k_aeskey,   3,      0,      do_c2k_aeskey,
+ 	"c2k_aeskey <AES key offset in ddr> <AES key length in bytes",
+@@ -572,6 +576,9 @@ static int do_c2k_otp_config(cmd_tbl_t *cmdtp, int flag, int argc, char * const
+ 		return -1;
+ 	}
+ 
++    printf("Writing OTP config\n");
++
++#if 0
+ 	printf ("About to write to the OTP config.\nPlease review the settings\n");
+ 	printf ("secure boot config (%x)\n", secureboot_config);
+ 	printf ("is config correct? (Y/N)");
+@@ -587,6 +594,7 @@ static int do_c2k_otp_config(cmd_tbl_t *cmdtp, int flag, int argc, char * const
+ 			printf("\ndo_c2k_otp_config: Aborting\n");
+ 			return -1;
+ 	}
++#endif
+ 
+ 	c2k_otp_write(0x1, (u8 *)&secureboot_config, 1);
+ 
+diff --git a/arch/arm/include/asm/arch-comcerto/clkcore.h b/arch/arm/include/asm/arch-comcerto/clkcore.h
+index 72b7a38..3dc242b 100644
+--- a/arch/arm/include/asm/arch-comcerto/clkcore.h
++++ b/arch/arm/include/asm/arch-comcerto/clkcore.h
+@@ -340,4 +340,12 @@ enum {
+ #define read_clk_div_bypass_backup(reg) readl(reg - CLK_REG_DIV_BUG_BASE + IRAM_CLK_REG_MIRROR)
+ #define write_clk_div_bypass_backup(val, reg) writel(val, reg - CLK_REG_DIV_BUG_BASE + IRAM_CLK_REG_MIRROR)
+ 
++u32 HAL_get_arm_peri_clk(void);
++u32 HAL_get_pll_freq(int pll_no);
++u32 HAL_get_arm_clk(void);
++u32 HAL_get_axi_clk(void);
++u32 HAL_get_ddr_clk(void);
++u32 HAL_get_ipsec_clk(void);
++int HAL_get_c2k_revision();
++
+ #endif /* __CLKCORE_H__ */
+diff --git a/arch/arm/include/asm/arch-comcerto/comcerto-2000-fns.h b/arch/arm/include/asm/arch-comcerto/comcerto-2000-fns.h
+new file mode 100644
+index 0000000..1088dc6
+--- /dev/null
++++ b/arch/arm/include/asm/arch-comcerto/comcerto-2000-fns.h
+@@ -0,0 +1,6 @@
++#ifndef COMCERTO_2000_FNS_H
++#define COMCERTO_2000_FNS_H
++
++void comcerto_pad_config();
++
++#endif // COMCERTO_2000_FNS_H
+diff --git a/arch/arm/include/asm/arch-comcerto/ecc.h b/arch/arm/include/asm/arch-comcerto/ecc.h
+index 631fa9a..6c27e92 100644
+--- a/arch/arm/include/asm/arch-comcerto/ecc.h
++++ b/arch/arm/include/asm/arch-comcerto/ecc.h
+@@ -84,7 +84,8 @@
+ /* Polynomial Status (ECC_POLY_STAT) */
+ #define ECC_CORR_REQ		(1 << 0)
+ #define ECC_ERASED_PAGE		(1 << 1)
+-#define ECC_UNCORR_ERR_HAMM	(1 << 2)
++
++//#define ECC_UNCORR_ERR_HAMM	(1 << 2)
+ 
+ /* Correction Status (ECC_CORR_STAT) */
+ #define ECC_TAG_MASK		0xFFFF
+diff --git a/arch/arm/lib/board.c b/arch/arm/lib/board.c
+index cb412df..47e3dbb 100644
+--- a/arch/arm/lib/board.c
++++ b/arch/arm/lib/board.c
+@@ -527,8 +527,15 @@ static void display_fdt_model(const void *blob)
+  ************************************************************************
+  */
+ 
++int g_factory_reset = 0;
++
+ void board_init_r(gd_t *id, ulong dest_addr)
+ {
++#ifdef CONFIG_BOXV2
++    g_factory_reset = !!*(unsigned *)0x8300C000; // barebox MALLOC_BASE
++    printf("Factory reset: %s\n", g_factory_reset ? "yes" : "no");
++#endif
++
+ 	ulong malloc_start;
+ #if !defined(CONFIG_SYS_NO_FLASH)
+ 	ulong flash_size;
+diff --git a/board/bitdefender/boxv2/board.c b/board/bitdefender/boxv2/board.c
+index 22d0eaa..70d9816 100644
+--- a/board/bitdefender/boxv2/board.c
++++ b/board/bitdefender/boxv2/board.c
+@@ -6,6 +6,10 @@
+ #include <asm/arch/clkcore.h>
+ #include <asm/arch/comcerto-common.h>
+ 
++#include <asm/arch-comcerto/comcerto-2000-fns.h>
++
++#include "../../../drivers/net/c2000_eth/c2000_eth.h"
++
+ DECLARE_GLOBAL_DATA_PTR;
+ 
+ 
+@@ -212,6 +221,8 @@ int c2000_eth_board_init(char *devname, int eth_port)
+    //             athrs17_phy_setup(devname,EMAC1_PHY_ADDR);
+         }
+ 
++        return 0;
++
+ }
+ 
+ #if defined(CONFIG_SHOW_BOOT_PROGRESS)
+diff --git a/common/Makefile b/common/Makefile
+index 09b9bae..9f2feb1 100644
+--- a/common/Makefile
++++ b/common/Makefile
+@@ -36,6 +36,8 @@ COBJS-y += s_record.o
+ COBJS-y += xyzModem.o
+ COBJS-y += cmd_disk.o
+ 
++COBJS-$(CONFIG_PRODUCTION) += blobs.o
++
+ # core command
+ COBJS-y += cmd_boot.o
+ COBJS-$(CONFIG_CMD_BOOTM) += cmd_bootm.o
+diff --git a/common/blobs.c b/common/blobs.c
+new file mode 100644
+index 0000000..b65b273
+--- /dev/null
++++ b/common/blobs.c
+@@ -0,0 +1,64 @@
++#include <common.h>
++
++#include <blobs.h>
++
++#include "../production_ubi.img.gz.h"
++#include "../final_uloader.bin.h"
++#include "../public.raw.h"
++
++int get_serial_key()
++{
++    int counter = 3;
++
++    printf(" %d ", counter);
++    
++    while (counter > 0) {
++        if (tstc()) {
++            getc();
++            break;
++        }
++    	udelay(1000*1000);
++        counter--;
++		printf("\b\b\b%2d ", counter);
++    }
++        
++    printf("\b\b\b\n");
++
++    return counter > 0;
++}
++
++void process_blobs()
++{
++    // unzip is available as cmd, so we just pass the hardcoded gz data start offset
++    char ubi_gz_addr_str[16];
++    snprintf(ubi_gz_addr_str, sizeof(ubi_gz_addr_str), "0x%x", (size_t)production_ubi_img_gz);
++    setenv("ubi_gz_addr", ubi_gz_addr_str);
++    
++    //
++
++    char uloader_addr_str[16];
++    char uloader_len_str[16];
++
++    snprintf(uloader_addr_str, sizeof(uloader_addr_str), "0x%x", (size_t)final_uloader_bin);
++    snprintf(uloader_len_str, sizeof(uloader_len_str), "0x%x", final_uloader_bin_len);
++
++    printf("uloader_addr is %s\n", uloader_addr_str);
++    printf("uloader_len is %s\n", uloader_len_str);
++
++    setenv("uloader_addr", uloader_addr_str);
++    setenv("uloader_len", uloader_len_str);
++
++    //
++
++    char public_key_addr_str[16];
++    char public_key_len_str[16];
++
++    snprintf(public_key_addr_str, sizeof(public_key_addr_str), "0x%x", (size_t)public_raw);
++    snprintf(public_key_len_str, sizeof(public_key_len_str), "0x%x", public_raw_len);
++
++    printf("public_key_addr is %s\n", public_key_addr_str);
++    printf("public_key_len is %s\n", public_key_len_str);
++
++    setenv("public_key_addr", public_key_addr_str);
++    setenv("public_key_len", public_key_len_str);
++}
+diff --git a/common/cmd_pfe_commands.c b/common/cmd_pfe_commands.c
+index cde18bf..e91c804 100644
+--- a/common/cmd_pfe_commands.c
++++ b/common/cmd_pfe_commands.c
+@@ -29,15 +29,17 @@
+ #include <common.h>
+ #include <command.h>
+ #include "../drivers/net/c2000_eth/c2000_eth.h"
++#include "../drivers/net/c2000_eth/pfe_firmware.h"
+ #include "../drivers/net/c2000_eth/pfe/pfe.h"
+ #include "../drivers/net/c2000_eth/pfe/cbus/class_csr.h"
++#include "../drivers/net/c2000_eth/pfe/cbus/class_csr.h"
+ 
+ static void pfe_command_help(void)
+ {
+ 	printf("Usage: pfe [firmware | load | lib | pe | gemac | gem | gpi | class | tmu | util | hif | status | expt | fftest] <options>\n");
+ }
+ 
+-static void pfe_command_firmware(int argc, char *argv[])
++static void pfe_command_firmware(int argc, char * const argv[])
+ {
+ 	if (argc == 3 && strcmp(argv[2], "init") == 0)
+ 	{
+@@ -57,7 +59,7 @@ static void pfe_command_firmware(int argc, char *argv[])
+ 	}
+ }
+ 
+-static void pfe_command_load(int argc, char *argv[])
++static void pfe_command_load(int argc, char * const argv[])
+ {
+ 	if (argc >= 3 && strcmp(argv[2], "elf") == 0)
+ 	{
+@@ -86,7 +88,7 @@ static void pfe_command_load(int argc, char *argv[])
+ 	}
+ }
+ 
+-static void pfe_command_lib(int argc, char *argv[])
++static void pfe_command_lib(int argc, char * const argv[])
+ {
+ 	if (argc >= 3 && strcmp(argv[2], "init") == 0)
+ 	{
+@@ -117,7 +119,7 @@ static void pfe_command_lib(int argc, char *argv[])
+ 	}
+ }
+ 
+-static void pfe_command_pe(int argc, char *argv[])
++static void pfe_command_pe(int argc, char * const argv[])
+ {
+ 	if (argc >= 3 && strcmp(argv[2], "pmem") == 0)
+ 	{
+@@ -319,7 +321,7 @@ void gpi_set_config(void *base, GPI_CFG *cfg)
+ }
+ #endif
+ 
+-static void pfe_command_class(int argc, char *argv[])
++static void pfe_command_class(int argc, char * const argv[])
+ {
+ 	if (argc >= 3 && strcmp(argv[2], "init") == 0)
+ 	{
+@@ -418,7 +420,7 @@ static void pfe_command_class(int argc, char *argv[])
+ 	}
+ }
+ 
+-static void pfe_command_tmu(int argc, char *argv[])
++static void pfe_command_tmu(int argc, char * const argv[])
+ {
+ 	if (argc >= 3 && strcmp(argv[2], "init") == 0)
+ 	{
+@@ -474,7 +476,7 @@ static void pfe_command_tmu(int argc, char *argv[])
+ #define	PESTATUS_ADDR_TMU	0x80
+ #define	PESTATUS_ADDR_UTIL	0x0
+ 
+-static void pfe_command_status(int argc, char *argv[])
++static void pfe_command_status(int argc, char * const argv[])
+ {
+ 	int do_clear = 0;
+ 	int j;
+@@ -590,7 +592,7 @@ static const char *register_names[EXPT_REG_COUNT] = {
+ 		" r12", " r13", " r14", " r15"
+ };
+ 
+-static void pfe_command_expt(int argc, char *argv[])
++static void pfe_command_expt(int argc, char * const argv[])
+ {
+ 	unsigned int id, i, val, addr;
+ 
+@@ -613,7 +615,7 @@ static void pfe_command_expt(int argc, char *argv[])
+ 	}
+ }
+ 
+-static void pfe_command_util(int argc, char *argv[])
++static void pfe_command_util(int argc, char * const argv[])
+ {
+ 	if (argc == 3 && strcmp(argv[2], "init") == 0)
+ 	{
+diff --git a/common/cmd_pfe_stat.c b/common/cmd_pfe_stat.c
+index 213ca7a..3b21691 100644
+--- a/common/cmd_pfe_stat.c
++++ b/common/cmd_pfe_stat.c
+@@ -266,7 +266,7 @@ static void pe_enable_stats(unsigned int mask, unsigned char enable)
+ }
+ 
+ #ifndef SBL_EMUL
+-static int pfe_stats(struct command *cmdtp, int argc, char *argv[])
++static int do_pfe_stats(cmd_tbl_t *cmdtp, int flag, int argc, char * const argv[])
+ #else
+ int main(int argc, char *argv[])
+ #endif
+@@ -371,7 +371,7 @@ int main(int argc, char *argv[])
+ 
+ #ifndef SBL_EMUL
+ U_BOOT_CMD(
+-	pfe_stats,	4,	1,	pfe_stats,
++	pfe_stats,	4,	1,	do_pfe_stats,
+ 	"retrieve PFE statistics ",
+ 	"Usage:\n \
+ Enable/Disable Statistics:    pfe_stat <class_gFpStatFeatureBitMask> <tmu_gFpStatFeatureBitMask> [enable | disable] [queue | interface]\n \
+diff --git a/common/cmd_socinfo.c b/common/cmd_socinfo.c
+index d85123d..23d9b5b 100644
+--- a/common/cmd_socinfo.c
++++ b/common/cmd_socinfo.c
+@@ -1,7 +1,9 @@
+ #include <common.h>
+ #include <command.h>
+ 
+-extern version_string[];
++#include <asm/arch/clkcore.h>
++
++extern char version_string[];
+ 
+ static int do_socinfo(cmd_tbl_t *cmdtp, int flag, int argc, char * const argv[])
+ {
+diff --git a/common/cmd_ubifs.c b/common/cmd_ubifs.c
+index 7752123..5a9abbd 100644
+--- a/common/cmd_ubifs.c
++++ b/common/cmd_ubifs.c
+@@ -45,7 +45,7 @@ int ubifs_init(void);
+ int ubifs_mount(char *vol_name);
+ void ubifs_umount(struct ubifs_info *c);
+ int ubifs_ls(char *dir_name);
+-int ubifs_load(char *filename, u32 addr, u32 size);
++int ubifs_load(const char *filename, u32 addr, u32 size);
+ 
+ int do_ubifs_mount(cmd_tbl_t *cmdtp, int flag, int argc, char * const argv[])
+ {
+diff --git a/common/cmd_update_spi.c b/common/cmd_update_spi.c
+index 3868080..73639f9 100644
+--- a/common/cmd_update_spi.c
++++ b/common/cmd_update_spi.c
+@@ -13,6 +13,8 @@
+ #include <command.h>
+ #include <config.h>
+ 
++#include <linux/compat.h> // EXPORT_SYMBOL
++
+ #define BUF_SIZE	4
+ #define CHIP_SELECT_S25FL064A	0
+ 
+@@ -29,6 +31,11 @@ extern int spi_eeprom_read(/*struct spi_device *spi,\*/
+ static struct spi_device *ls_spi;
+ unsigned int erase_glob = 0;
+ 
++static int flash_sector_size = SPI_FLASH_SECTOR_SIZE;
++static int flash_page_size = SPI_FLASH_NOR_PAGE_SIZE;
++
++static u8 chip_id[3];
++
+ #ifdef	DEBUG
+ void print_buffer(char *buf, int s)
+ {
+@@ -72,7 +79,7 @@ int nor_s25fl128_sector_erase(u8 cs, int sector_num)
+ 	 	0xd8, 0x00, 0x00, 0x00,
+ 	};
+ 
+-        int sector_addr = sector_num * SPI_FLASH_SECTOR_SIZE;
++        int sector_addr = sector_num * flash_sector_size;
+         u8 rdsr = 0x1;
+         int ret = 0;
+ 
+@@ -135,28 +142,226 @@ int spi_sector_erase(int sec, int num_sec)
+ }
+ EXPORT_SYMBOL(spi_sector_erase);
+ 
++static int _c2k_spi_write(u8 cs, const void *buf, size_t len)
++{
++    u8 rdsr = 0x01;
++    int ret;
++    uint8_t wren_cmd[BUF_SIZE] = {
++        0x06, 0x00, 0x00, 0x00,
++    };
++
++    do {
++        rdsr = read_rdsr(cs);
++    } while (rdsr & 0x1);
++
++    ret = c2k_spi_write(cs, wren_cmd, 1);
++    if (ret)
++    {
++        printk("%s: WREN failed\n", __func__);
++        return ret;
++    }
++
++    do {
++        rdsr = read_rdsr(cs);
++    } while (!(rdsr & 0x2));
++
++    ret = c2k_spi_write(cs, buf, len);
++    if(ret)
++    {
++        printk ("%s: failed.\n", __func__);
++        return ret;
++    }
++
++    do {
++        rdsr = read_rdsr(cs);
++    } while (rdsr & 0x1);
++
++    return 0;
++}
++
++/*
++ * NOTE: c2k_spi_write_then_read() is super bugged:
++ *
++ *   (1) it essentially IGNORES the last parameter (rx_len) and
++ *       instead uses tx_len as the size for the receive buffer. This
++ *       function does away with the pretense and simply passes
++ *       the same length as both rx_len and tx_len
++ *
++ *   (2) it seems to add a \0 byte in front of whatever the actual RX
++ *       data should be. Make sure you oversize your buffer by 1 and
++ *       adjust your offsets before calling this function
++ */
++static int _c2k_spi_write_then_read(u8 cs, const void *tx_buf, void *rx_buf, size_t len)
++{
++    u8 rdsr = 0x01;
++    int ret;
++
++    do {
++        rdsr = read_rdsr(cs);
++    } while (rdsr & 0x1);
++
++    ret = c2k_spi_write_then_read(cs, tx_buf, len, rx_buf, len);
++    if(ret)
++    {
++        printk("%s: failed.\n", __func__);
++        return ret;
++    }
++
++    do {
++        rdsr = read_rdsr(cs);
++    } while (rdsr & 0x1);
++
++    return 0;
++}
++
++static int mx25_detect(u8 *pret)
++{
++	uint8_t rdid_cmd[6] = { 0x9f, 0x0a, 0x0b, 0x0c, 0x0d }; // read identification
++	int ret;
++
++	printk("%s: running RDID\n", __func__);
++	ret = _c2k_spi_write_then_read(cs, rdid_cmd, rdid_cmd + 1, 4);
++	if (ret)
++	{
++		printk("%s: RDID failed. Assuming non-MX25 flash. Not clearing BP bits.\n", __func__);
++		*pret = 0;
++		return 0;
++	}
++
++	chip_id[0] = rdid_cmd[2];
++	chip_id[1] = rdid_cmd[3];
++	chip_id[2] = rdid_cmd[4];
++	printk("%s: RAW RDID result %02x %02x %02x %02x %02x\n", __func__,
++	rdid_cmd[0], rdid_cmd[1], rdid_cmd[2], rdid_cmd[3], rdid_cmd[4]);
++
++	if (!(rdid_cmd[2] == 0xc2 && rdid_cmd[3] == 0x22 && rdid_cmd[4] == 0x10)) {
++		printk("%s: Not MX25L5121EMC chip.\n", __func__);
++		*pret = 0;
++	} else {
++		printk("%s: MX25L5121EMC detected\n", __func__);
++		*pret = 1;
++	}
++
++	return 0;
++}
++
++static int mx25_unprotect()
++{
++	uint8_t rdsr_cmd[3] = { 0x05, 0x0a, 0x0b }; /* read status register  */
++	uint8_t wrsr_cmd[2] = { 0x01, 0x0a };       /* write status register */
++	uint8_t sr;
++	int ret;
++
++	ret = _c2k_spi_write_then_read(cs, rdsr_cmd, rdsr_cmd + 1, 2);
++	if (ret) {
++		printk("%s: RDSR failed.\n", __func__);
++		return ret;
++	}
++
++	sr = rdsr_cmd[2];
++
++	printk("%s: SR value: %x (BP0=%d BP1=%d)\n", __func__,
++		sr, (sr & 4) >> 2, (sr & 8) >> 3);
++
++	if (sr & 12) {
++		wrsr_cmd[1] = sr & ~12;
++		printk("%s: Write SR %x\n", __func__, wrsr_cmd[1]);
++
++		ret = _c2k_spi_write(cs, wrsr_cmd, 2);
++		if (ret) {
++			printk("%s: WRSR failed.\n", __func__);
++			return ret;
++		}
++
++		ret = _c2k_spi_write_then_read(cs, rdsr_cmd, rdsr_cmd + 1, 2);
++		if (ret) {
++			printk("%s: RDSR failed.\n", __func__);
++			return ret;
++		}
++
++		sr = rdsr_cmd[2];
++		printk("%s: SR value: %x (BP0=%d BP1=%d)\n",
++			__func__, sr, (sr & 4) >> 2, (sr & 8) >> 3);
++		printk("%s: SR2 = %x\n", __func__, read_rdsr(cs));
++
++		if (sr & 12) {
++			printk("%s: Failed to clear BP bits.\n", __func__);
++			return 1;
++		}
++	} else {
++		printk("%s: write protection already off\n", __func__);
++	}
++
++	return 0;
++}
++
++static int mx25_write_image(u8 *src, ulong sec, ulong offset, ulong count)
++{
++	u8 wrcmd[36] = { 0x02, 0, 0, 0 }; /* program page (PP) */
++	u8 cecmd[1] = { 0xc7 };           /* chip erase        */
++	ulong wrote = 0;
++	ulong addr = sec * 4096 + offset;
++	ulong chunk = 0;
++
++	if (offset % 32) {
++		printk("%s: ERROR: offset not alligned to 32 bytes (%lu)\n",
++			__func__, offset);
++		return -1;
++	}
++
++	printk("%s: Erasing chip...\n", __func__);
++	_c2k_spi_write(cs, cecmd, 1);
++	printk("%s: ... done\n", __func__);
++
++	printk("Writing %lu bytes\n", count);
++	while (wrote < count) {
++		ulong to_write = count - wrote;
++		ulong i;
++
++		if (!to_write)
++			break;
++
++		if (to_write > 32)
++			to_write = 32;
++
++		wrcmd[1] = (addr & 0xff0000) >> 16;
++		wrcmd[2] = (addr & 0x00ff00) >> 8;
++		wrcmd[3] = (addr & 0x0000ff);
++
++		memcpy(wrcmd + 4, src + chunk * 32, to_write);
++		_c2k_spi_write(cs, wrcmd, 4 + to_write);
++
++		chunk += 1;
++		addr += to_write;
++		wrote += to_write;
++	}
++
++	printk("%s: WROTE %lu chunks\n", __func__, chunk);
++	return 0;
++}
++
+ #define	WRITE_BYTES	8
+ int write_bytes_page_addr(struct spi_device *spi, u8 *b, int num_buytes, u8 p, unsigned int a)
+ {
+-	/* S25FL128: pp_cmd: |1B_cmd|3B_addr|at_least_1B_data|erite_buf| */
+-	uint8_t s25fl128_pp_cmd[4+WRITE_BYTES] = {
+-		0x02, 0x00, 0x00, 0x00,
+-	};
+-	/* S25FL128: wren_cmd: |1B_cmd| */
+-	uint8_t s25fl128_wren_cmd[BUF_SIZE] = {
+-		0x06, 0x00, 0x00, 0x00,
+-	};
++        /* S25FL128: pp_cmd: |1B_cmd|3B_addr|at_least_1B_data|erite_buf| */
++        uint8_t s25fl128_pp_cmd[4+WRITE_BYTES] = {
++                0x02, 0x00, 0x00, 0x00,
++        };
++        /* S25FL128: wren_cmd: |1B_cmd| */
++        uint8_t s25fl128_wren_cmd[BUF_SIZE] = {
++                0x06, 0x00, 0x00, 0x00,
++        };
+ 
+         int ret = 0;
+         u8 rdsr = 0x1;
+ 
+-        int addr = (SPI_FLASH_SECTOR_SIZE * p)+a;
++        int addr = (flash_sector_size * p)+a;
+         s25fl128_pp_cmd[1] = ((addr & 0xff0000)>>16);
+         s25fl128_pp_cmd[2] = ((addr & 0xff00)>>8);
+         s25fl128_pp_cmd[3] = (addr & 0xff);
+ 
+-	memcpy(s25fl128_pp_cmd+4, b, num_buytes);
+-
++        memcpy(s25fl128_pp_cmd+4, b, num_buytes);
++        
+         do {
+                 rdsr = read_rdsr(cs);
+         }while (rdsr & 0x1);
+@@ -197,7 +402,7 @@ int read_bytes_page_addr(struct spi_device *spi, u8 *b, int num_buytes, u8 p, un
+ 	};
+ 
+ 
+-        int addr = (SPI_FLASH_SECTOR_SIZE * p)+a;
++        int addr = (flash_sector_size * p)+a;
+         s25fl128_rd_cmd[1] = ((addr & 0xff0000)>>16);
+         s25fl128_rd_cmd[2] = ((addr & 0xff00)>>8);
+         s25fl128_rd_cmd[3] = (addr & 0xff);
+@@ -235,7 +440,7 @@ static int spi_copy_write(char *src, unsigned int len, unsigned int sec, unsigne
+ 
+ 	while (l < (len/WRITE_BYTES))
+ 	{
+-		ret = write_bytes_page_addr(cs, src, WRITE_BYTES, sec, off);
++		ret = write_bytes_page_addr((struct spi_device *)cs, (u8 *)src, WRITE_BYTES, sec, off);
+ 		if(ret)
+ 		{
+ 			printk ("%s: failed.\n", __func__);
+@@ -250,7 +455,7 @@ static int spi_copy_write(char *src, unsigned int len, unsigned int sec, unsigne
+ 	{
+ 		l = len%WRITE_BYTES;
+ 
+-		ret = write_bytes_page_addr(ls_spi, src, l, sec, off);
++		ret = write_bytes_page_addr(ls_spi, (u8 *)src, l, sec, off);
+ 		if(ret)
+ 		{
+ 			printk ("%s: failed.\n", __func__);
+@@ -269,7 +474,7 @@ int spi_copy_read(char *dst, unsigned int len, unsigned int sec, unsigned int of
+ 
+ 	while (l < (len/READ_BYTES))
+ 	{
+-		ret = read_bytes_page_addr(ls_spi, tmp, READ_BYTES, sec, off);
++		ret = read_bytes_page_addr(ls_spi, (u8 *)tmp, READ_BYTES, sec, off);
+ 		if(ret)
+ 		{
+ 			printk ("%s: failed.\n", __func__);
+@@ -287,7 +492,7 @@ int spi_copy_read(char *dst, unsigned int len, unsigned int sec, unsigned int of
+ 	{
+ 		l = len%READ_BYTES;
+ 
+-		ret = read_bytes_page_addr(ls_spi, tmp, l, sec, off);
++		ret = read_bytes_page_addr(ls_spi, (u8 *)tmp, l, sec, off);
+ 		if(ret)
+ 		{
+ 			printk ("%s: failed.\n", __func__);
+@@ -306,23 +511,31 @@ static void comcerto_spi_flash_write(unsigned char *src, ulong sec, ulong offset
+ {
+ 	int wl = 0;
+ 	unsigned int off = 0;
+-	unsigned int itr = SPI_FLASH_SECTOR_SIZE/SPI_FLASH_NOR_PAGE_SIZE;
+-	int write_bytes = SPI_FLASH_NOR_PAGE_SIZE;
++	unsigned int itr = flash_sector_size / flash_page_size;
++	int write_bytes = flash_page_size;
+ 	unsigned int *ptr_w;
+ 	int s;
+ 	ulong size;
++	u8 is_mx25 = 0;
+ 
+ 	ptr_w = (unsigned int *)src;
+ 	s = sec;
+ 	size = count;
+ 	off = offset;
+ 
++	mx25_detect(&is_mx25);
++	if (is_mx25) {
++		mx25_unprotect();
++		mx25_write_image(src, sec, offset, count);
++		return;
++	}
++
+ 	while(size)
+ 	{
+-		itr = SPI_FLASH_SECTOR_SIZE/SPI_FLASH_NOR_PAGE_SIZE;
++		itr = flash_sector_size / flash_page_size;
+ 		erase_glob=0;
+ 
+-		if(size < SPI_FLASH_SECTOR_SIZE) {
++		if(size < flash_sector_size) {
+ 			if(size%write_bytes)
+ 				itr = size/write_bytes + 1;
+ 			else
+@@ -330,7 +543,7 @@ static void comcerto_spi_flash_write(unsigned char *src, ulong sec, ulong offset
+ 
+ 			size = 0;
+ 		} else {
+-			size -= SPI_FLASH_SECTOR_SIZE;
++			size -= flash_sector_size;
+ 		}
+ 
+ 		for (wl = 0 ; wl < itr ; wl++)
+diff --git a/common/env_nand.c b/common/env_nand.c
+index a082fe8..f6ccbf0 100644
+--- a/common/env_nand.c
++++ b/common/env_nand.c
+@@ -345,6 +345,8 @@ int get_nand_env_oob(nand_info_t *nand, unsigned long *result)
+ 
+ extern struct super_block *ubifs_sb;
+ 
++extern unsigned g_factory_reset;
++
+ /**
+  * read u-boot env from ubi
+  * the "boot" mtd partition contains an ubi image, which has a "boot" volume
+@@ -352,6 +354,9 @@ extern struct super_block *ubifs_sb;
+  */
+ static int read_env_from_ubi(u_char *buf)
+ {
++    const char *env_bootstrap = "/bootstrap/env";
++    const char *env_path = g_factory_reset ? env_bootstrap : "/env";
++
+ 	int err = 0;
+ 
+ 	env_t *env_from_ubi = (env_t *)buf;
+@@ -376,15 +381,17 @@ static int read_env_from_ubi(u_char *buf)
+ 
+ 	memset(env_from_ubi->data, 0, ENV_SIZE);
+ 
+-	err = ubifs_load("/env/primary", env_from_ubi->data, ENV_SIZE);
++	err = ubifs_load(env_path, (u32)env_from_ubi->data, ENV_SIZE);
+ 	if (err) {
+-		printf("failed to load primary env file\n");
++		printf("failed to load env from %s\n", env_path);
+ 
+-		memset(env_from_ubi->data, 0, ENV_SIZE);
++		if (strcmp(env_path, env_bootstrap) != 0) {
++			memset(env_from_ubi->data, 0, ENV_SIZE);
+ 
+-		err = ubifs_load("/env/backup", env_from_ubi->data, ENV_SIZE);
+-		if (err)
+-			printf("failed to load backup env file\n");
++			err = ubifs_load(env_bootstrap, (u32)env_from_ubi->data, ENV_SIZE);
++			if (err)
++				printf("failed to load env from %s\n", env_bootstrap);
++		}
+ 	}
+ 
+ 	ubifs_umount(ubifs_sb->s_fs_info);
+@@ -463,6 +470,9 @@ done:
+  */
+ void env_relocate_spec(void)
+ {
++#if defined(CONFIG_PRODUCTION)
++    set_default_env("!Production boot");
++#else
+ #if !defined(ENV_IS_EMBEDDED)
+ 	int ret;
+ 	ALLOC_CACHE_ALIGN_BUFFER(char, buf, CONFIG_ENV_SIZE);
+@@ -500,5 +510,6 @@ void env_relocate_spec(void)
+ 
+ 	env_import(buf, 1);
+ #endif /* ! ENV_IS_EMBEDDED */
++#endif /* ! CONFIG_PRODUCTION */
+ }
+ #endif /* CONFIG_ENV_OFFSET_REDUND */
+diff --git a/common/main.c b/common/main.c
+index f411386..b14e94a 100644
+--- a/common/main.c
++++ b/common/main.c
+@@ -49,6 +49,10 @@
+ #include <fdt_support.h>
+ #endif /* CONFIG_OF_LIBFDT */
+ 
++#ifdef CONFIG_PRODUCTION
++#include <blobs.h>
++#endif
++
+ #include <post.h>
+ #include <linux/ctype.h>
+ #include <menu.h>
+@@ -353,6 +357,35 @@ static void process_fdt_options(const void *blob)
+ 
+ /****************************************************************************/
+ 
++#ifndef CONFIG_PRODUCTION
++extern unsigned g_factory_reset;
++#endif
++
++#define UART0_BASEADDR 0x96300000 // the ledboard
++
++#define UART_LSR    0x14
++#define LSR_THRE    0x20
++#define UART_THR    0x00
++
++void c2k_putc(size_t map_base, char c)
++{
++	/* wait for room in the tx FIFO on FFUART */
++	while ((readl(map_base + UART_LSR) & LSR_THRE) == 0) ;
++	writel(c, map_base + UART_THR);
++}
++
++static unsigned char led_cmd_spinning[] = {
++    0x02, 0x00, 0x10, 0x02, 0x04, 0xff, 0xff, 0xff, 0x07, 0x08, 0x03
++};
++
++void make_ledboard_spin(void)
++{
++    int i;
++
++    for (i=0; i<sizeof(led_cmd_spinning); i++)
++        c2k_putc(UART0_BASEADDR, led_cmd_spinning[i]);
++}
++
+ void main_loop (void)
+ {
+ #ifndef CONFIG_SYS_HUSH_PARSER
+@@ -416,6 +449,17 @@ void main_loop (void)
+ 	hush_init_var ();
+ #endif
+ 
++#ifdef CONFIG_PRODUCTION
++    process_blobs();
++#endif
++
++#ifndef CONFIG_PRODUCTION
++    if (g_factory_reset) {
++        setenv("bootflags", "factory_reset=1");
++        setenv("slot",  "bootstrap");
++    }
++#endif
++
+ #ifdef CONFIG_PREBOOT
+ 	if ((p = getenv ("preboot")) != NULL) {
+ # ifdef CONFIG_AUTOBOOT_KEYED
+@@ -507,6 +551,8 @@ void main_loop (void)
+ 	set_working_fdt_addr((void *)gd->fdt_blob);
+ #endif /* CONFIG_OF_CONTROL */
+ 
++#ifndef CONFIG_NO_INTERACTIVE_SHELL
++
+ 	/*
+ 	 * Main Loop for Monitor Command Processing
+ 	 */
+@@ -556,6 +602,15 @@ void main_loop (void)
+ 		}
+ 	}
+ #endif /*CONFIG_SYS_HUSH_PARSER*/
++
++#else // CONFIG_NO_INTERACTIVE_SHELL
++
++    make_ledboard_spin();
++
++    printf("\n### End of bootcmd commands. Board halted. ###\n");
++    for (;;);
++
++#endif // CONFIG_NO_INTERACTIVE_SHELL
+ }
+ 
+ #ifdef CONFIG_BOOT_RETRY_TIME
+diff --git a/common/miiphyutil.c b/common/miiphyutil.c
+index 204d6cc..4653c69 100644
+--- a/common/miiphyutil.c
++++ b/common/miiphyutil.c
+@@ -333,7 +333,7 @@ int miiphy_write(const char *devname, unsigned char addr, unsigned char reg,
+ 
+ int miiphy_debug_read(char *devname, unsigned char addr, unsigned char reg)
+ {
+-	unsigned int value;
++	unsigned short value;
+ 
+ 	if (miiphy_write (devname, addr, PHY_DEBUG_PORT_ADDRESS, reg) != 0) {
+ 		puts ("PHY Debug register failed\n");
+@@ -355,6 +355,8 @@ int miiphy_debug_write(char *devname, unsigned char addr, unsigned char reg, uns
+ 	if (miiphy_write (devname, addr, PHY_DEBUG_PORT_DATA, value) != 0) {
+ 		puts ("PHY Debug register failed\n");
+ 	}
++
++    return 0;
+ }
+ 
+ void miiphy_enable_rgmii_rx_delay(char *devname, unsigned char addr)
+diff --git a/common/xyzModem.c b/common/xyzModem.c
+index f30b002..611f741 100644
+--- a/common/xyzModem.c
++++ b/common/xyzModem.c
+@@ -92,9 +92,9 @@ static struct
+ #endif
+ } xyz;
+ 
+-#define xyzModem_CHAR_TIMEOUT            2000	/* 2 seconds */
+-#define xyzModem_MAX_RETRIES             20
+-#define xyzModem_MAX_RETRIES_WITH_CRC    10
++#define xyzModem_CHAR_TIMEOUT            400	/* 0.4 seconds */
++#define xyzModem_MAX_RETRIES             100
++#define xyzModem_MAX_RETRIES_WITH_CRC    50
+ #define xyzModem_CAN_COUNT                3	/* Wait for 3 CAN before quitting */
+ 
+ 
+@@ -561,6 +561,8 @@ xyzModem_stream_open (connection_info_t * info, int *err)
+   xyz.file_length = 0;
+ #endif
+ 
++  udelay(500*1000);
++ 
+   CYGACC_COMM_IF_PUTC (*xyz.__chan, (xyz.crc_mode ? 'C' : NAK));
+ 
+   if (xyz.mode == xyzModem_xmodem)
+diff --git a/config.mk b/config.mk
+index c99864b..c790e39 100644
+--- a/config.mk
++++ b/config.mk
+@@ -240,6 +240,8 @@ else
+ CFLAGS := $(CPPFLAGS) -Wall -Wstrict-prototypes
+ endif
+ 
++CFLAGS += -Wno-unused-variable -Wno-unused-function -Wno-unused-label -Wno-unused-but-set-variable -Wno-unused-value -Wno-strict-prototypes -Wno-multichar
++
+ CFLAGS_SSP := $(call cc-option,-fno-stack-protector)
+ CFLAGS += $(CFLAGS_SSP)
+ # Some toolchains enable security related warning flags by default,
+diff --git a/drivers/mtd/nand/comcerto_nand.c b/drivers/mtd/nand/comcerto_nand.c
+index 287ea20..002fb68 100644
+--- a/drivers/mtd/nand/comcerto_nand.c
++++ b/drivers/mtd/nand/comcerto_nand.c
+@@ -606,7 +606,7 @@ static void comcerto_nand_write_page_hwecc(struct mtd_info *mtd,
+  *
+  */
+ static int comcerto_nand_read_page_hwecc(struct mtd_info *mtd,
+-		struct nand_chip *chip, uint8_t *buf)
++		struct nand_chip *chip, uint8_t *buf, int page)
+ {
+ 	struct nand_chip *nand_device = mtd->priv;
+ 	int i, eccsize = nand_device->ecc.size;
+@@ -680,6 +680,8 @@ int erase_old_nand_fmt(struct mtd_info *mtd, u8 bb_old_layout)
+ 	if (nand_scan_tail(mtd)) {
+ 		printf("nand_scan_tail failed \n");
+ 	}
++
++    return 0;
+ }
+ #endif /* CONFIG_COMCERTO_NAND_ERASE_FBB */
+ 
+diff --git a/drivers/net/c2000_eth/Makefile b/drivers/net/c2000_eth/Makefile
+index 1bdb09e..281e3c9 100644
+--- a/drivers/net/c2000_eth/Makefile
++++ b/drivers/net/c2000_eth/Makefile
+@@ -30,9 +30,9 @@ COBJS 	:= c2000_ethernet.o pfe_firmware.o pfe.o pfe_driver.o ar8328.o
+ SRCS 	:= $(COBJS:.o=.c)
+ OBJS 	:= $(addprefix $(obj),$(COBJS))
+ 
+-all:	$(obj).depend $(LIB)
++all:	$(LIB)
+ 
+-$(LIB): $(OBJS)
++$(LIB): $(obj).depend $(OBJS)
+ 	$(call cmd_link_o_target, $(OBJS))
+ 
+ 
+diff --git a/drivers/net/c2000_eth/ar8328.c b/drivers/net/c2000_eth/ar8328.c
+index 54ccbc4..0afc629 100644
+--- a/drivers/net/c2000_eth/ar8328.c
++++ b/drivers/net/c2000_eth/ar8328.c
+@@ -299,8 +299,7 @@ athrs17_phy_init(char *devname, int phyUnit)
+ 		miiphy_read (devname, phyAddr, S17_PHY_CONTROL, &phyHwStatus);
+ 
+ 		if (S17_RESET_DONE(phyHwStatus)) {
+-			printf(
+-					("Port %d, Neg Success\n", phyUnit));
++			printf("Port %d, Neg Success\n", phyUnit);
+ 
+ 			break;
+ 		}
+@@ -362,7 +361,7 @@ athrs17_phy_init(char *devname, int phyUnit)
+ //	printf("eth%d: Phy Specific Status=%4.4x\n", mdev->read(mdev, S17_PHYADDR(phyUnit),S17_PHY_SPEC_STATUS));
+ //	printk("Phy setup Complete\n"); 
+ 
+-
++    return 0;
+ }
+ 
+ int
+@@ -381,6 +380,8 @@ athrs17_phy_setup(char *devname, int phyUnit)
+                         athrs17_phy_init(devname, i);
+                 }
+         }
++
++        return 0;
+ }
+ 
+ 
+@@ -390,6 +391,7 @@ unsigned int athrs17_reg_read(char *devname, unsigned int reg_addr)
+ 	uint32_t phy_addr, tmp_val, reg_val;
+ 	uint16_t phy_val;
+ 	uint8_t phy_reg;
++	uint16_t reg_val_ushort, tmp_val_ushort;
+ 
+ 	/* change reg_addr to 16-bit word address, 32-bit aligned */
+ 	reg_word_addr = (reg_addr & 0xfffffffc) >> 1;
+@@ -406,13 +408,17 @@ unsigned int athrs17_reg_read(char *devname, unsigned int reg_addr)
+ 	/* read register in lower address */
+ 	phy_addr = 0x10 | ((reg_word_addr >> 5) & 0x7); /* bit7-5 of reg address */
+ 	phy_reg = (uint8_t) (reg_word_addr & 0x1f);   /* bit4-0 of reg address */
+-	miiphy_read (devname, phy_addr, phy_reg, &reg_val);
++	miiphy_read (devname, phy_addr, phy_reg, &reg_val_ushort);
++
++	reg_val = reg_val_ushort;
+ 
+ 	/* read register in higher address */
+ 	reg_word_addr++;
+ 	phy_addr = 0x10 | ((reg_word_addr >> 5) & 0x7); /* bit7-5 of reg address */
+ 	phy_reg = (uint8_t) (reg_word_addr & 0x1f);   /* bit4-0 of reg address */
+-	miiphy_read (devname, phy_addr, phy_reg, &tmp_val);
++	miiphy_read (devname, phy_addr, phy_reg, &tmp_val_ushort);
++
++	tmp_val = tmp_val_ushort;
+ 	reg_val |= (tmp_val << 16);
+ 
+ //	printf("%s: reg 0x%x val 0x%x\n",__func__, reg_addr, reg_val);
+diff --git a/drivers/net/c2000_eth/c2000_eth.h b/drivers/net/c2000_eth/c2000_eth.h
+index b191dce..a843f2b 100644
+--- a/drivers/net/c2000_eth/c2000_eth.h
++++ b/drivers/net/c2000_eth/c2000_eth.h
+@@ -170,6 +170,7 @@ int pfe_remove(struct pfe *pfe);
+ #define dprint(fmt, arg...)
+ //#define dprint	printf
+ 
++int c2000_eth_board_init(char *devname, int eth_port);
+ 
+ #endif //_C2000_ETH_H_
+ 
+diff --git a/drivers/net/c2000_eth/c2000_ethernet.c b/drivers/net/c2000_eth/c2000_ethernet.c
+index 0cc7229..f08484c 100644
+--- a/drivers/net/c2000_eth/c2000_ethernet.c
++++ b/drivers/net/c2000_eth/c2000_ethernet.c
+@@ -12,6 +12,10 @@
+ #include "ar8328.h"
+ #endif
+ 
++#include <netdev.h>
++
++#include "c2000_eth.h"
++
+ struct gemac_s gem_info[] = {
+         /* PORT_0 configuration */
+         {
+@@ -127,7 +131,7 @@ static int gem_phy_timeout(struct c2000_eth_dev *priv, int timeout)
+         return 0;
+ }
+ 
+-static struct c2000_eth_dev* get_gemac(char *devname)
++static struct c2000_eth_dev* get_gemac(const char *devname)
+ {
+         int i;
+ 
+@@ -149,7 +153,7 @@ static struct c2000_eth_dev* get_gemac(char *devname)
+  *
+  * @return  16bit value on success, a negivie value (-1) on error
+  */
+-static int c2000_phy_read(char *devname, unsigned char phy_addr, unsigned char phy_reg, unsigned short *value)
++static int c2000_phy_read(const char *devname, unsigned char phy_addr, unsigned char phy_reg, unsigned short *value)
+ {
+         struct c2000_eth_dev *priv = get_gemac(devname);
+ 
+@@ -183,7 +187,7 @@ static int c2000_phy_read(char *devname, unsigned char phy_addr, unsigned char p
+  *
+  * @return              On success returns 0, a negative value (-1) on error
+  */
+-static int c2000_phy_write(char *devname, unsigned char phy_addr, unsigned char phy_reg, unsigned short value)
++static int c2000_phy_write(const char *devname, unsigned char phy_addr, unsigned char phy_reg, unsigned short value)
+ {
+         struct c2000_eth_dev *priv = get_gemac(devname);
+ 
+@@ -353,9 +357,9 @@ static int c2000_eth_send(struct eth_device *dev, volatile void *data, int lengt
+ 
+         int rc;
+         uint64_t tx_tmo;
+-	int i;
++        int i = 0;
+ 
+-        rc = pfe_send(priv->gemac_port, data, length);
++        rc = pfe_send(priv->gemac_port, (void *)data, length);
+ 
+         if (rc < 0) {
+                 printf("Tx Q full\n");
+@@ -366,14 +370,14 @@ static int c2000_eth_send(struct eth_device *dev, volatile void *data, int lengt
+                 rc = pfe_tx_done();
+                 if (rc == 0)
+                         break;
+-		
+-		udelay(100);
+-		i++;
+-		if(i == 30000)
+-			printf("Tx timeout, send failed\n");
+-			break;
+-
+-	}
++                
++                udelay(100);
++                i++;
++                if(i == 30000) {
++                        printf("Tx timeout, send failed\n");
++                        break;
++                }
++        }
+ 
+ 	return 0;
+ }
+@@ -408,7 +412,7 @@ int c2000_gemac_initialize(bd_t * bis, int index, char *devname)
+         struct eth_device *dev;
+         struct c2000_eth_dev *priv;
+         struct pfe *pfe;
+-	int i;
++        int i;
+ 
+         //Bring HFE and GEMTX out of reset
+         writel(0x0, HFE_RESET);
+@@ -425,7 +429,7 @@ int c2000_gemac_initialize(bd_t * bis, int index, char *devname)
+                 return -1;
+ 
+         gemac_list[index] = priv;
+-	priv->gemac_port = index;
++        priv->gemac_port = index;
+         priv->gem = &gem_info[priv->gemac_port];
+         priv->dev = dev;
+ 
+@@ -435,11 +439,11 @@ int c2000_gemac_initialize(bd_t * bis, int index, char *devname)
+         pfe->ddr_baseaddr = (void *)CONFIG_DDR_BASEADDR;
+         pfe->ddr_phys_baseaddr = (unsigned long)CONFIG_DDR_PHYS_BASEADDR;
+ 
+-	sprintf(dev->name, devname);
++        sprintf(dev->name, devname);
+         dev->priv = priv;
+         dev->init = c2000_eth_init;
+         dev->halt = c2000_eth_halt;
+-        dev->send = c2000_eth_send;
++        dev->send = (void *)c2000_eth_send;
+         dev->recv = c2000_eth_recv;
+ 
+         /* Tell u-boot to get the addr from the env */
+@@ -450,16 +454,16 @@ int c2000_gemac_initialize(bd_t * bis, int index, char *devname)
+         switch(priv->gemac_port)  {
+                 case EMAC_PORT_0:
+                 default:
+-                        priv->gem->gemac_base = EMAC1_BASE_ADDR;
+-                        priv->gem->egpi_base = EGPI1_BASE_ADDR;
++                        priv->gem->gemac_base = (void *)EMAC1_BASE_ADDR;
++                        priv->gem->egpi_base = (void *)EGPI1_BASE_ADDR;
+                 break;
+                 case EMAC_PORT_1:
+-                        priv->gem->gemac_base = EMAC2_BASE_ADDR;
+-                        priv->gem->egpi_base = EGPI2_BASE_ADDR;
++                        priv->gem->gemac_base = (void *)EMAC2_BASE_ADDR;
++                        priv->gem->egpi_base = (void *)EGPI2_BASE_ADDR;
+                 break;
+                 case EMAC_PORT_2:
+-                        priv->gem->gemac_base = EMAC3_BASE_ADDR;
+-                        priv->gem->egpi_base = EGPI3_BASE_ADDR;
++                        priv->gem->gemac_base = (void *)EMAC3_BASE_ADDR;
++                        priv->gem->egpi_base = (void *)EGPI3_BASE_ADDR;
+                 break;
+         }
+ 
+@@ -473,7 +477,9 @@ int c2000_gemac_initialize(bd_t * bis, int index, char *devname)
+                 miiphy_register(dev->name, c2000_phy_read, c2000_phy_write);
+         }
+ 
+-	c2000_eth_board_init(dev->name, priv->gemac_port);
++        c2000_eth_board_init(dev->name, priv->gemac_port);
+ 
+         eth_register(dev);
++
++        return 0;
+ }
+diff --git a/drivers/net/c2000_eth/pfe.c b/drivers/net/c2000_eth/pfe.c
+index e8937f7..3def17c 100644
+--- a/drivers/net/c2000_eth/pfe.c
++++ b/drivers/net/c2000_eth/pfe.c
+@@ -23,81 +23,81 @@ void pfe_lib_init(void *cbus_base, void *ddr_base, unsigned long ddr_phys_base)
+ 	pe[CLASS0_ID].dmem_base_addr = CLASS_DMEM_BASE_ADDR(0);
+ 	pe[CLASS0_ID].pmem_base_addr = CLASS_IMEM_BASE_ADDR(0);
+ 	pe[CLASS0_ID].pmem_size = CLASS_IMEM_SIZE;
+-	pe[CLASS0_ID].mem_access_wdata = CLASS_MEM_ACCESS_WDATA;
+-	pe[CLASS0_ID].mem_access_addr = CLASS_MEM_ACCESS_ADDR;
+-	pe[CLASS0_ID].mem_access_rdata = CLASS_MEM_ACCESS_RDATA;
++	pe[CLASS0_ID].mem_access_wdata = (void *)CLASS_MEM_ACCESS_WDATA;
++	pe[CLASS0_ID].mem_access_addr = (void *)CLASS_MEM_ACCESS_ADDR;
++	pe[CLASS0_ID].mem_access_rdata = (void *)CLASS_MEM_ACCESS_RDATA;
+ 
+ 	pe[CLASS1_ID].dmem_base_addr = CLASS_DMEM_BASE_ADDR(1);
+ 	pe[CLASS1_ID].pmem_base_addr = CLASS_IMEM_BASE_ADDR(1);
+ 	pe[CLASS1_ID].pmem_size = CLASS_IMEM_SIZE;
+-	pe[CLASS1_ID].mem_access_wdata = CLASS_MEM_ACCESS_WDATA;
+-	pe[CLASS1_ID].mem_access_addr = CLASS_MEM_ACCESS_ADDR;
+-	pe[CLASS1_ID].mem_access_rdata = CLASS_MEM_ACCESS_RDATA;
++	pe[CLASS1_ID].mem_access_wdata = (void *)CLASS_MEM_ACCESS_WDATA;
++	pe[CLASS1_ID].mem_access_addr = (void *)CLASS_MEM_ACCESS_ADDR;
++	pe[CLASS1_ID].mem_access_rdata = (void *)CLASS_MEM_ACCESS_RDATA;
+ 
+ 	pe[CLASS2_ID].dmem_base_addr = CLASS_DMEM_BASE_ADDR(2);
+ 	pe[CLASS2_ID].pmem_base_addr = CLASS_IMEM_BASE_ADDR(2);
+ 	pe[CLASS2_ID].pmem_size = CLASS_IMEM_SIZE;
+-	pe[CLASS2_ID].mem_access_wdata = CLASS_MEM_ACCESS_WDATA;
+-	pe[CLASS2_ID].mem_access_addr = CLASS_MEM_ACCESS_ADDR;
+-	pe[CLASS2_ID].mem_access_rdata = CLASS_MEM_ACCESS_RDATA;
++	pe[CLASS2_ID].mem_access_wdata = (void *)CLASS_MEM_ACCESS_WDATA;
++	pe[CLASS2_ID].mem_access_addr = (void *)CLASS_MEM_ACCESS_ADDR;
++	pe[CLASS2_ID].mem_access_rdata = (void *)CLASS_MEM_ACCESS_RDATA;
+ 
+ 	pe[CLASS3_ID].dmem_base_addr = CLASS_DMEM_BASE_ADDR(3);
+ 	pe[CLASS3_ID].pmem_base_addr = CLASS_IMEM_BASE_ADDR(3);
+ 	pe[CLASS3_ID].pmem_size = CLASS_IMEM_SIZE;
+-	pe[CLASS3_ID].mem_access_wdata = CLASS_MEM_ACCESS_WDATA;
+-	pe[CLASS3_ID].mem_access_addr = CLASS_MEM_ACCESS_ADDR;
+-	pe[CLASS3_ID].mem_access_rdata = CLASS_MEM_ACCESS_RDATA;
++	pe[CLASS3_ID].mem_access_wdata = (void *)CLASS_MEM_ACCESS_WDATA;
++	pe[CLASS3_ID].mem_access_addr = (void *)CLASS_MEM_ACCESS_ADDR;
++	pe[CLASS3_ID].mem_access_rdata = (void *)CLASS_MEM_ACCESS_RDATA;
+ 
+ #if !defined(CONFIG_PLATFORM_PCI)
+ 	pe[CLASS4_ID].dmem_base_addr = CLASS_DMEM_BASE_ADDR(4);
+ 	pe[CLASS4_ID].pmem_base_addr = CLASS_IMEM_BASE_ADDR(4);
+ 	pe[CLASS4_ID].pmem_size = CLASS_IMEM_SIZE;
+-	pe[CLASS4_ID].mem_access_wdata = CLASS_MEM_ACCESS_WDATA;
+-	pe[CLASS4_ID].mem_access_addr = CLASS_MEM_ACCESS_ADDR;
+-	pe[CLASS4_ID].mem_access_rdata = CLASS_MEM_ACCESS_RDATA;
++	pe[CLASS4_ID].mem_access_wdata = (void *)CLASS_MEM_ACCESS_WDATA;
++	pe[CLASS4_ID].mem_access_addr = (void *)CLASS_MEM_ACCESS_ADDR;
++	pe[CLASS4_ID].mem_access_rdata = (void *)CLASS_MEM_ACCESS_RDATA;
+ 
+ 	pe[CLASS5_ID].dmem_base_addr = CLASS_DMEM_BASE_ADDR(5);
+ 	pe[CLASS5_ID].pmem_base_addr = CLASS_IMEM_BASE_ADDR(5);
+ 	pe[CLASS5_ID].pmem_size = CLASS_IMEM_SIZE;
+-	pe[CLASS5_ID].mem_access_wdata = CLASS_MEM_ACCESS_WDATA;
+-	pe[CLASS5_ID].mem_access_addr = CLASS_MEM_ACCESS_ADDR;
+-	pe[CLASS5_ID].mem_access_rdata = CLASS_MEM_ACCESS_RDATA;
++	pe[CLASS5_ID].mem_access_wdata = (void *)CLASS_MEM_ACCESS_WDATA;
++	pe[CLASS5_ID].mem_access_addr = (void *)CLASS_MEM_ACCESS_ADDR;
++	pe[CLASS5_ID].mem_access_rdata = (void *)CLASS_MEM_ACCESS_RDATA;
+ #endif
+ 	pe[TMU0_ID].dmem_base_addr = TMU_DMEM_BASE_ADDR(0);
+ 	pe[TMU0_ID].pmem_base_addr = TMU_IMEM_BASE_ADDR(0);
+ 	pe[TMU0_ID].pmem_size = TMU_IMEM_SIZE;
+-	pe[TMU0_ID].mem_access_wdata = TMU_MEM_ACCESS_WDATA;
+-	pe[TMU0_ID].mem_access_addr = TMU_MEM_ACCESS_ADDR;
+-	pe[TMU0_ID].mem_access_rdata = TMU_MEM_ACCESS_RDATA;
++	pe[TMU0_ID].mem_access_wdata = (void *)TMU_MEM_ACCESS_WDATA;
++	pe[TMU0_ID].mem_access_addr = (void *)TMU_MEM_ACCESS_ADDR;
++	pe[TMU0_ID].mem_access_rdata = (void *)TMU_MEM_ACCESS_RDATA;
+ 
+ #if !defined(CONFIG_TMU_DUMMY)
+ 	pe[TMU1_ID].dmem_base_addr = TMU_DMEM_BASE_ADDR(1);
+ 	pe[TMU1_ID].pmem_base_addr = TMU_IMEM_BASE_ADDR(1);
+ 	pe[TMU1_ID].pmem_size = TMU_IMEM_SIZE;
+-	pe[TMU1_ID].mem_access_wdata = TMU_MEM_ACCESS_WDATA;
+-	pe[TMU1_ID].mem_access_addr = TMU_MEM_ACCESS_ADDR;
+-	pe[TMU1_ID].mem_access_rdata = TMU_MEM_ACCESS_RDATA;
++	pe[TMU1_ID].mem_access_wdata = (void *)TMU_MEM_ACCESS_WDATA;
++	pe[TMU1_ID].mem_access_addr = (void *)TMU_MEM_ACCESS_ADDR;
++	pe[TMU1_ID].mem_access_rdata = (void *)TMU_MEM_ACCESS_RDATA;
+ 
+ 	pe[TMU2_ID].dmem_base_addr = TMU_DMEM_BASE_ADDR(2);
+ 	pe[TMU2_ID].pmem_base_addr = TMU_IMEM_BASE_ADDR(2);
+ 	pe[TMU2_ID].pmem_size = TMU_IMEM_SIZE;
+-	pe[TMU2_ID].mem_access_wdata = TMU_MEM_ACCESS_WDATA;
+-	pe[TMU2_ID].mem_access_addr = TMU_MEM_ACCESS_ADDR;
+-	pe[TMU2_ID].mem_access_rdata = TMU_MEM_ACCESS_RDATA;
++	pe[TMU2_ID].mem_access_wdata = (void *)TMU_MEM_ACCESS_WDATA;
++	pe[TMU2_ID].mem_access_addr = (void *)TMU_MEM_ACCESS_ADDR;
++	pe[TMU2_ID].mem_access_rdata = (void *)TMU_MEM_ACCESS_RDATA;
+ 
+ 	pe[TMU3_ID].dmem_base_addr = TMU_DMEM_BASE_ADDR(3);
+ 	pe[TMU3_ID].pmem_base_addr = TMU_IMEM_BASE_ADDR(3);
+ 	pe[TMU3_ID].pmem_size = TMU_IMEM_SIZE;
+-	pe[TMU3_ID].mem_access_wdata = TMU_MEM_ACCESS_WDATA;
+-	pe[TMU3_ID].mem_access_addr = TMU_MEM_ACCESS_ADDR;
+-	pe[TMU3_ID].mem_access_rdata = TMU_MEM_ACCESS_RDATA;
++	pe[TMU3_ID].mem_access_wdata = (void *)TMU_MEM_ACCESS_WDATA;
++	pe[TMU3_ID].mem_access_addr = (void *)TMU_MEM_ACCESS_ADDR;
++	pe[TMU3_ID].mem_access_rdata = (void *)TMU_MEM_ACCESS_RDATA;
+ #endif
+ 
+ #if !defined(CONFIG_UTIL_PE_DISABLED)
+ 	pe[UTIL_ID].dmem_base_addr = UTIL_DMEM_BASE_ADDR;
+-	pe[UTIL_ID].mem_access_wdata = UTIL_MEM_ACCESS_WDATA;
+-	pe[UTIL_ID].mem_access_addr = UTIL_MEM_ACCESS_ADDR;
+-	pe[UTIL_ID].mem_access_rdata = UTIL_MEM_ACCESS_RDATA;
++	pe[UTIL_ID].mem_access_wdata = (void *)UTIL_MEM_ACCESS_WDATA;
++	pe[UTIL_ID].mem_access_addr = (void *)UTIL_MEM_ACCESS_ADDR;
++	pe[UTIL_ID].mem_access_rdata = (void *)UTIL_MEM_ACCESS_RDATA;
+ #endif
+ }
+ 
+@@ -1278,7 +1278,7 @@ void class_set_config(CLASS_CFG *cfg)
+ 	writel(HASH_CRC_PORT_IP | QB2BUS_LE, CLASS_ROUTE_MULTI);
+ 
+ 	writel(cfg->route_table_baseaddr,		CLASS_ROUTE_TABLE_BASE);
+-	memset(cfg->route_table_baseaddr, 0, ROUTE_TABLE_SIZE);
++	memset((void *)cfg->route_table_baseaddr, 0, ROUTE_TABLE_SIZE);
+ 
+ 	writel(CLASS_PE0_RO_DM_ADDR0_VAL,		CLASS_PE0_RO_DM_ADDR0);
+ 	writel(CLASS_PE0_RO_DM_ADDR1_VAL,		CLASS_PE0_RO_DM_ADDR1);
+diff --git a/drivers/net/c2000_eth/pfe/pfe.h b/drivers/net/c2000_eth/pfe/pfe.h
+index 343fe8c..ae3a0e2 100644
+--- a/drivers/net/c2000_eth/pfe/pfe.h
++++ b/drivers/net/c2000_eth/pfe/pfe.h
+@@ -255,4 +255,8 @@ void hif_tx_disable(void);
+ void hif_rx_enable(void);
+ void hif_rx_disable(void);
+ 
++struct firmware;
++
++int pfe_load_elf(int pe_mask, const struct firmware *fw);
++
+ #endif /* _PFE_H_ */
+diff --git a/drivers/net/c2000_eth/pfe_driver.c b/drivers/net/c2000_eth/pfe_driver.c
+index 7c65e94..138eb37 100644
+--- a/drivers/net/c2000_eth/pfe_driver.c
++++ b/drivers/net/c2000_eth/pfe_driver.c
+@@ -481,10 +481,10 @@ static void pfe_bmu_init(struct pfe *pfe)
+ 		.size = BMU2_BUF_SIZE,
+ 	};
+ 
+-	bmu_init(BMU1_BASE_ADDR, &bmu1_cfg);
++	bmu_init((void *)BMU1_BASE_ADDR, &bmu1_cfg);
+ 	printf("bmu1 init: done\n");
+ 
+-	bmu_init(BMU2_BASE_ADDR, &bmu2_cfg);
++	bmu_init((void *)BMU2_BASE_ADDR, &bmu2_cfg);
+ 	printf("bmu2 init: done\n");
+ }
+ 
+@@ -531,17 +531,17 @@ static void pfe_gpi_init(struct pfe *pfe)
+ 		.aseq_len = HGPI_ASEQ_LEN,
+ 	};
+ 
+-	gpi_init(EGPI1_BASE_ADDR, &egpi1_cfg);
++	gpi_init((void *)EGPI1_BASE_ADDR, &egpi1_cfg);
+ 	printf("GPI1 init complete\n");
+ 
+-   gpi_init(EGPI2_BASE_ADDR, &egpi2_cfg);
++   gpi_init((void *)EGPI2_BASE_ADDR, &egpi2_cfg);
+ 	printf("GPI2 init complete\n");
+ 
+ #if 0
+    gpi_init(EGPI3_BASE_ADDR, &egpi3_cfg);
+ #endif
+ 
+-   gpi_init(HGPI_BASE_ADDR, &hgpi_cfg);
++   gpi_init((void *)HGPI_BASE_ADDR, &hgpi_cfg);
+ 	printf("HGPI init complete\n");
+ }
+ 
+@@ -549,11 +549,11 @@ static void pfe_gpi_init(struct pfe *pfe)
+  */
+ void pfe_gem_enable_all(void)
+ {
+-	gpi_enable(EGPI1_BASE_ADDR);
+-	gemac_enable(EMAC1_BASE_ADDR);
++	gpi_enable((void *)EGPI1_BASE_ADDR);
++	gemac_enable((void *)EMAC1_BASE_ADDR);
+ 
+-	gpi_enable(EGPI2_BASE_ADDR);
+-	gemac_enable(EMAC2_BASE_ADDR);
++	gpi_enable((void *)EGPI2_BASE_ADDR);
++	gemac_enable((void *)EMAC2_BASE_ADDR);
+ 
+ #if 0
+ 	gpi_enable(EGPI3_BASE_ADDR);
+@@ -614,10 +614,10 @@ static int pfe_hw_init(struct pfe *pfe)
+ 
+ 	pfe_hif_init(pfe);
+ 
+-	bmu_enable(BMU1_BASE_ADDR);
++	bmu_enable((void *)BMU1_BASE_ADDR);
+ 	printf("bmu1 enabled\n");
+ 
+-	bmu_enable(BMU2_BASE_ADDR);
++	bmu_enable((void *)BMU2_BASE_ADDR);
+ 	printf("bmu2 enabled\n");
+ 
+ 	printf("%s: done\n", __func__);
+diff --git a/drivers/net/c2000_eth/pfe_firmware.c b/drivers/net/c2000_eth/pfe_firmware.c
+index 202647a..9afa055 100644
+--- a/drivers/net/c2000_eth/pfe_firmware.c
++++ b/drivers/net/c2000_eth/pfe_firmware.c
+@@ -47,7 +47,7 @@ int pfe_load_elf(int pe_mask, const struct firmware *fw)
+ 	printf("%s no of sections: %d\n", __func__, sections);
+ 
+ 	/* Some sanity checks */
+-	if (strncmp(&elf_hdr->e_ident[EI_MAG0], ELFMAG, SELFMAG))
++	if (strncmp((const char *)&elf_hdr->e_ident[EI_MAG0], ELFMAG, SELFMAG))
+ 	{
+ 		printf("%s: incorrect elf magic number\n", __func__);
+ 		return -1;
+@@ -147,7 +147,7 @@ int pfe_firmware_init(void)
+ 	tmu_enable(0xf);
+ 	class_enable();
+ 
+-	gpi_enable(HGPI_BASE_ADDR);
++	gpi_enable((void *)HGPI_BASE_ADDR);
+ 
+ 
+ err3:
+diff --git a/drivers/otp/c2k_otp.c b/drivers/otp/c2k_otp.c
+index 47cda28..f2f8a5c 100644
+--- a/drivers/otp/c2k_otp.c
++++ b/drivers/otp/c2k_otp.c
+@@ -56,10 +56,11 @@ int otp_smart_write_sequence(u32 offset, u8 prog_data)
+ 		if(!readl(OTP_PGMEN_INPUT))
+ 			break;
+ 
+-		printf("Timeout waiting for PGMEN "
+-				"to be deasserted\n");
++		if (i==0) printf(".");
+ 		udelay(1);
+ 	}
++
++	return 0;
+ }
+ 
+ 
+diff --git a/drivers/serial/serial_comcerto.c b/drivers/serial/serial_comcerto.c
+index 784993a..77340b7 100644
+--- a/drivers/serial/serial_comcerto.c
++++ b/drivers/serial/serial_comcerto.c
+@@ -27,6 +27,11 @@
+ #include <serial.h>
+ #include <linux/compiler.h>
+ 
++// bh:fixme
++#ifdef COMCERTO_UART0_BASE
++#undef COMCERTO_UART0_BASE
++#endif
++
+ #define COMCERTO_UART0_BASE             0x96400000
+ 
+ #if !defined(CONFIG_UART0) && !defined(CONFIG_UART1)
+diff --git a/drivers/spi/c2k_spi.c b/drivers/spi/c2k_spi.c
+index 61c0ed2..82db776 100644
+--- a/drivers/spi/c2k_spi.c
++++ b/drivers/spi/c2k_spi.c
+@@ -1,3 +1,5 @@
++#include <common.h>
++
+ #include <asm/types.h>
+ #include <asm/io.h>
+ #include <linux/types.h>
+@@ -287,7 +289,7 @@ static int c2k_spi_transfer(u8 chip_select,struct spi_transfer *t)
+ 
+ 	writel(0, spi_base + COMCERTO_SPI_SSIENR);
+ 
+-	txbuf = t->tx_buf;
++	txbuf = (u8 *)t->tx_buf;
+ 	rxbuf = t->rx_buf;
+ 
+ 	switch(op) {
+@@ -352,7 +354,7 @@ static int c2k_spi_transfer(u8 chip_select,struct spi_transfer *t)
+ 		while(readl(spi_base + COMCERTO_SPI_SR) & BUSY)
+ 			;
+ 
+-        return 0;
++		return 0;
+ 
+ 
+ }
+@@ -366,7 +368,9 @@ int c2k_spi_write(u8 cs, const void *buf, size_t len)
+ 			.mode		= SPI_TRANSFER_MODE_WRITE_ONLY,
+                 };
+ 
+-	c2k_spi_transfer(cs, &t);
++		c2k_spi_transfer(cs, &t);
++
++		return 0;
+ }
+ 
+ int c2k_spi_read(u8 cs, void *buf, size_t len)
+@@ -377,7 +381,9 @@ int c2k_spi_read(u8 cs, void *buf, size_t len)
+ 			.mode		= SPI_TRANSFER_MODE_READ_ONLY,
+                 };
+ 
+-	c2k_spi_transfer(cs, &t);
++		c2k_spi_transfer(cs, &t);
++
++		return 0;
+ }
+ 
+ int c2k_spi_write_then_read(u8 cs, const void *tx_buf, size_t tx_len, void *rx_buf, size_t rx_len)
+@@ -389,6 +395,8 @@ int c2k_spi_write_then_read(u8 cs, const void *tx_buf, size_t tx_len, void *rx_b
+ 			.mode		= SPI_TRANSFER_MODE_WRITE_READ,
+                 };
+ 
+-	c2k_spi_transfer(cs, &t);
++		c2k_spi_transfer(cs, &t);
++
++		return 0;
+ }
+ 
+diff --git a/fs/ubifs/debug.h b/fs/ubifs/debug.h
+index 62617b6..689b48d 100644
+--- a/fs/ubifs/debug.h
++++ b/fs/ubifs/debug.h
+@@ -314,16 +314,20 @@ void ubifs_debugging_exit(struct ubifs_info *c);
+ 		       __func__, __LINE__, 0);                      \
+ } while (0)
+ 
++#ifndef dbg_err
+ #define dbg_err(fmt, ...)   do {                                               \
+ 	if (0)                                                                 \
+ 		ubifs_err(fmt, ##__VA_ARGS__);                                 \
+ } while (0)
++#endif
+ 
++#ifndef dbg_msg
+ #define dbg_msg(fmt, ...) do {                                                 \
+ 	if (0)                                                                 \
+ 		printk(KERN_DEBUG "UBIFS DBG (pid %d): %s: " fmt "\n",         \
+ 		       0, __func__, ##__VA_ARGS__);                 \
+ } while (0)
++#endif
+ 
+ #define dbg_dump_stack()
+ #define ubifs_assert_cmt_locked(c)
+@@ -334,7 +338,11 @@ void ubifs_debugging_exit(struct ubifs_info *c);
+ #define dbg_lp(fmt, ...)    dbg_msg(fmt, ##__VA_ARGS__)
+ #define dbg_find(fmt, ...)  dbg_msg(fmt, ##__VA_ARGS__)
+ #define dbg_mnt(fmt, ...)   dbg_msg(fmt, ##__VA_ARGS__)
++
++#ifndef dbg_io
+ #define dbg_io(fmt, ...)    dbg_msg(fmt, ##__VA_ARGS__)
++#endif
++
+ #define dbg_cmt(fmt, ...)   dbg_msg(fmt, ##__VA_ARGS__)
+ #define dbg_budg(fmt, ...)  dbg_msg(fmt, ##__VA_ARGS__)
+ #define dbg_log(fmt, ...)   dbg_msg(fmt, ##__VA_ARGS__)
+diff --git a/fs/ubifs/ubifs.c b/fs/ubifs/ubifs.c
+index 44be3f5..a9b8faf 100644
+--- a/fs/ubifs/ubifs.c
++++ b/fs/ubifs/ubifs.c
+@@ -373,7 +373,7 @@ out_free:
+ 	return ret;
+ }
+ 
+-static unsigned long ubifs_findfile(struct super_block *sb, char *filename)
++static unsigned long ubifs_findfile(struct super_block *sb, const char *filename)
+ {
+ 	int ret;
+ 	char *next;
+@@ -677,7 +677,7 @@ error:
+ 	return err;
+ }
+ 
+-int ubifs_load(char *filename, u32 addr, u32 size)
++int ubifs_load(const char *filename, u32 addr, u32 size)
+ {
+ 	struct ubifs_info *c = ubifs_sb->s_fs_info;
+ 	unsigned long inum;
+diff --git a/fs/ubifs/ubifs.h b/fs/ubifs/ubifs.h
+index 0af471a..6c17881 100644
+--- a/fs/ubifs/ubifs.h
++++ b/fs/ubifs/ubifs.h
+@@ -1830,6 +1830,14 @@ extern const struct inode_operations ubifs_symlink_inode_operations;
+ extern struct backing_dev_info ubifs_backing_dev_info;
+ extern struct ubifs_compressor *ubifs_compressors[UBIFS_COMPR_TYPES_CNT];
+ 
++/* super.c */
++int ubifs_init(void);
++int ubifs_mount(char *vol_name);
++void ubifs_umount(struct ubifs_info *c);
++
++/* ubifs.c */
++int ubifs_load(const char *filename, u32 addr, u32 size);
++
+ /* io.c */
+ void ubifs_ro_mode(struct ubifs_info *c, int err);
+ int ubifs_wbuf_write_nolock(struct ubifs_wbuf *wbuf, void *buf, int len);
+diff --git a/include/blobs.h b/include/blobs.h
+new file mode 100644
+index 0000000..5684af8
+--- /dev/null
++++ b/include/blobs.h
+@@ -0,0 +1,6 @@
++#ifndef _BLOBS_H_
++#define _BLOBS_H_
++
++void process_blobs();
++
++#endif // _BLOBS_H_
+diff --git a/include/config_cmd_default.h b/include/config_cmd_default.h
+index 6e3903c..51fa00b 100644
+--- a/include/config_cmd_default.h
++++ b/include/config_cmd_default.h
+@@ -30,7 +30,12 @@
+ #endif
+ #define CONFIG_CMD_LOADB	/* loadb			*/
+ #define CONFIG_CMD_LOADS	/* loads			*/
++
++#ifndef CONFIG_BOXV2
++// don't allow these since they can be used to disable secure boot checks, etc
+ #define CONFIG_CMD_MEMORY	/* md mm nm mw cp cmp crc base loop mtest */
++#endif
++
+ #define CONFIG_CMD_MISC		/* Misc functions like sleep etc*/
+ #define CONFIG_CMD_NET		/* bootp, tftpboot, rarpboot	*/
+ #define CONFIG_CMD_NFS		/* NFS support			*/
+diff --git a/include/configs/boxv2.h b/include/configs/boxv2.h
+index 23bba20..00627e4 100644
+--- a/include/configs/boxv2.h
++++ b/include/configs/boxv2.h
+@@ -51,8 +51,8 @@
+  */
+ /* define one of these to choose the UART0 or UART1 as console */
+ #define CONFIG_UART0		1	/* TODO We use UART1. Change it along with driver */
+-#define CONFIG_BAUDRATE		115200
+-#define CONFIG_BAUDRATE_TABLE	{115200, 19200, 38400, 57600, 9600}
++#define CONFIG_BAUDRATE		921600
++#define CONFIG_BAUDRATE_TABLE	{921600, 115200, 19200, 38400, 57600, 9600}
+ #define CONFIG_COMCERTO_SERIAL
+ 
+ #define CONFIG_NAND_COMCERTO
+@@ -107,9 +107,6 @@
+ /* SPACC Driver */
+ #define CONFIG_DRIVER_SPACC
+ 
+-/* Enable Secure boot*/
+-#define CONFIG_SECUREBOOT
+-
+ /*SPI NOR Flash CS:0*/
+ #define SPI_FLASH_SIZE						(64 * 1024) /* 64 kB */
+ #define SPI_FLASH_NOR_PAGE_SIZE   			256 /* Bytes */
+@@ -174,7 +170,7 @@
+ 
+ #define CONFIG_SYS_MALLOC_LEN		(CONFIG_ENV_SIZE + 128 * 1024) + (NAND_BBT_SIZE)
+ #define CONFIG_SYS_INIT_RAM_ADDR	0x01000000 /* DDR address */
+-#define CONFIG_SYS_INIT_RAM_SIZE	0x00080000 /* 512K */
++#define CONFIG_SYS_INIT_RAM_SIZE	0x000C0000 /* 768K */
+ #define CONFIG_SYS_GBL_DATA_SIZE	128	/* size in bytes reserved for initial data */
+ #define CONFIG_SYS_GBL_DATA_OFFSET	((CONFIG_SYS_INIT_RAM_ADDR + CONFIG_SYS_INIT_RAM_SIZE) - CONFIG_SYS_GBL_DATA_SIZE)
+ #define CONFIG_SYS_INIT_SP_ADDR		CONFIG_SYS_GBL_DATA_OFFSET
+@@ -185,7 +181,7 @@
+ 						sizeof(CONFIG_SYS_PROMPT) + 16)
+ 
+ #define CONFIG_SYS_LOAD_ADDR		(CONFIG_SYS_SDRAM_BASE + 0x01000000) /* default load address */
+-#define CONFIG_SYS_MAXARGS		15 /* max number of command args */
++#define CONFIG_SYS_MAXARGS		240 /* max number of command args */
+ #define CONFIG_SYS_LONGHELP
+ #define CONFIG_AUTO_COMPLETE
+ #define CONFIG_CMDLINE_EDITING
+@@ -215,11 +211,6 @@
+ #define CONFIG_CMD_SOCINFO
+ #define CONFIG_CMD_UPDATE_SPI
+ 
+-#define CONFIG_CMD_UBI
+-#define CONFIG_CMD_UBIFS
+-#define CONFIG_CMD_MTDPARTS
+-#define CONFIG_RBTREE
+-#define CONFIG_LZO
+ #define CONFIG_MTD_DEVICE
+ #define CONFIG_MTD_PARTITIONS
+ 
+@@ -236,13 +227,66 @@
+ 	"noinitrd " \
+ 	"usb3_internal_clk=yes pcie_gen1_only=yes " \
+ 	"${mtdparts}"
+-#define CONFIG_BOOTCOMMAND "env set bootargs " CONFIG_BOOTARGS "; nand read ${kernel_loadaddr} ${kernel_mtd}; bootm ${kernel_loadaddr};"
+ 
+-#define CONFIG_MTDPARTS        "1M(u-boot)ro,1M(env),4M(kernelR),256M(rootR),4M(kernelA),512M(rootA),4M(kernelB),512M(rootB),512M(data)"
++#define UBI_IMG_ADDR "0x22000000"
++
++// CONFIG_SERIAL_PROMPTS is for development / debugging only
++// #define CONFIG_SERIAL_PROMPTS 1
++
++// The line below is replaced verbatim using sed by production_boot.sh. 
++// Don't add spaces or anything to it.
++
++//#define CONFIG_PRODUCTION 1
++
++#ifdef CONFIG_PRODUCTION
++
++#define CONFIG_BOOTCOMMAND \
++    "unzip ${ubi_gz_addr} " UBI_IMG_ADDR "; " \
++    "env set ubi_img_len 0x${filesize}; " \
++    \
++    "echo WAITING FOR PRIVATE DATA; " \
++    "loady 0x20000000; " \
++    "nand erase.part private; " \
++    "nand write 0x20000000 private ${filesize}; " \
++    \
++    "nand erase.part boot; " \
++    "nand write " UBI_IMG_ADDR " boot ${ubi_img_len}; " \
++    \
++    "update_spi ${uloader_addr} 0 0 ${uloader_len}; " \
++    \
++    "echo NAND WRITE COMPLETE; " \
++    \
++    "c2k_otp_config 2 0 1; " \
++    "c2k_key write 4 ${public_key_addr} 2; " \
++    \
++    "echo FLASHING COMPLETE; " \
++
++#define CONFIG_CMD_UNZIP
++
++#else // CONFIG_PRODUCTION
++
++#define CONFIG_SECUREBOOT
++
++#define CONFIG_BOOTCOMMAND \
++    "echo Final uboot boot commands should be read from ubifs; "
++
++#define CONFIG_CMD_UBI
++#define CONFIG_CMD_UBIFS
++#define CONFIG_CMD_MTDPARTS
++#define CONFIG_RBTREE
++#define CONFIG_LZO
++
++#define CONFIG_NO_INTERACTIVE_SHELL
++
++#endif // CONFIG_PRODUCTION
++
++#define CONFIG_MTDPARTS        "1M(private),15M(u-boot)ro,256M(boot)"
+ #define CONFIG_MTDPARTS_NAND   "mtdparts=comcertonand:"CONFIG_MTDPARTS
+ #define MTDPARTS_DEFAULT       CONFIG_MTDPARTS_NAND
+ 
+ #define CONFIG_EXTRA_ENV_SETTINGS \
++    "ubi_img_addr=" UBI_IMG_ADDR "\0" \
++    \
+ 	"hostname=boxv2\0" \
+ 	"rootfstype=ubifs\0" \
+ 	"loadaddr=0x20000000\0" \
+@@ -260,7 +304,7 @@
+ #define CONFIG_ETHADDR		00:aa:bb:cc:dd:ee
+ #define CONFIG_IPADDR		192.168.0.2
+ #define CONFIG_SERVERIP		192.168.0.1
+-#define CONFIG_BOOTDELAY	3
++#define CONFIG_BOOTDELAY	0
+ 
+ /*
+  * Misc configuration options
+diff --git a/include/linux/compat.h b/include/linux/compat.h
+index e1338bf..ed35027 100644
+--- a/include/linux/compat.h
++++ b/include/linux/compat.h
+@@ -49,4 +49,7 @@
+ 				  , __FILE__, __LINE__); }
+ 
+ #define PAGE_SIZE	4096
++
++#define EXPORT_SYMBOL(...)
++
+ #endif
+diff --git a/include/linux/compiler-gcc5.h b/include/linux/compiler-gcc5.h
+new file mode 100644
+index 0000000..94dea3f
+--- /dev/null
++++ b/include/linux/compiler-gcc5.h
+@@ -0,0 +1,61 @@
++#ifndef __LINUX_COMPILER_H
++#error "Please don't include <linux/compiler-gcc4.h> directly, include <linux/compiler.h> instead."
++#endif
++
++/* GCC 4.1.[01] miscompiles __weak */
++#ifdef __KERNEL__
++# if __GNUC_MINOR__ == 1 && __GNUC_PATCHLEVEL__ <= 1
++#  error Your version of gcc miscompiles the __weak directive
++# endif
++#endif
++
++#define __used			__attribute__((__used__))
++#define __must_check 		__attribute__((warn_unused_result))
++#define __compiler_offsetof(a,b) __builtin_offsetof(a,b)
++#define __always_inline		inline __attribute__((always_inline))
++
++/*
++ * A trick to suppress uninitialized variable warning without generating any
++ * code
++ */
++#define uninitialized_var(x) x = x
++
++#if __GNUC_MINOR__ >= 3
++/* Mark functions as cold. gcc will assume any path leading to a call
++   to them will be unlikely.  This means a lot of manual unlikely()s
++   are unnecessary now for any paths leading to the usual suspects
++   like BUG(), printk(), panic() etc. [but let's keep them for now for
++   older compilers]
++
++   Early snapshots of gcc 4.3 don't support this and we can't detect this
++   in the preprocessor, but we can live with this because they're unreleased.
++   Maketime probing would be overkill here.
++
++   gcc also has a __attribute__((__hot__)) to move hot functions into
++   a special section, but I don't see any sense in this right now in
++   the kernel context */
++#define __cold			__attribute__((__cold__))
++
++
++#if __GNUC_MINOR__ >= 5
++/*
++ * Mark a position in code as unreachable.  This can be used to
++ * suppress control flow warnings after asm blocks that transfer
++ * control elsewhere.
++ *
++ * Early snapshots of gcc 4.5 don't support this and we can't detect
++ * this in the preprocessor, but we can live with this because they're
++ * unreleased.  Really, we need to have autoconf for the kernel.
++ */
++#define unreachable() __builtin_unreachable()
++#endif
++
++#endif
++
++#if __GNUC_MINOR__ > 0
++#define __compiletime_object_size(obj) __builtin_object_size(obj, 0)
++#endif
++#if __GNUC_MINOR__ >= 4
++#define __compiletime_warning(message) __attribute__((warning(message)))
++#define __compiletime_error(message) __attribute__((error(message)))
++#endif
+diff --git a/include/miiphy.h b/include/miiphy.h
+index 2d9cdb3..7021621 100644
+--- a/include/miiphy.h
++++ b/include/miiphy.h
+@@ -114,6 +114,9 @@ int bb_miiphy_write(const char *devname, unsigned char addr,
+ 		     unsigned char reg, unsigned short value);
+ #endif
+ 
++int miiphy_debug_write(char *devname, unsigned char addr, unsigned char reg, unsigned short value);
++int miiphy_debug_read(char *devname, unsigned char addr, unsigned char reg);
++
+ /* phy seed setup */
+ #define AUTO			99
+ #define _1000BASET		1000
+diff --git a/mkhdr/Makefile b/mkhdr/Makefile
+new file mode 100644
+index 0000000..eac66c4
+--- /dev/null
++++ b/mkhdr/Makefile
+@@ -0,0 +1,5 @@
++CC=gcc
++CFLAGS=-Wall -O
++
++mkhdr: mkhdr.c
++    
+diff --git a/mkhdr/make-hdr.sh b/mkhdr/make-hdr.sh
+new file mode 100755
+index 0000000..c651a8c
+--- /dev/null
++++ b/mkhdr/make-hdr.sh
+@@ -0,0 +1,8 @@
++#!/bin/bash
++
++[ -z "$1" ] && { echo need file; exit 1; }
++
++./mkhdr $(crc32 "$1") $(stat --printf="%s" "$1") > hdr.0
++./mkhdr $(crc32 "$1") $(stat --printf="%s" "$1") $(crc32 hdr.0) > hdr.1
++
++cat hdr.1 "$1" > "$1".hdr
+diff --git a/mkhdr/mkhdr.c b/mkhdr/mkhdr.c
+new file mode 100644
+index 0000000..91b509b
+--- /dev/null
++++ b/mkhdr/mkhdr.c
+@@ -0,0 +1,50 @@
++#include <stdio.h>
++#include <stdlib.h>
++#include <stdint.h>
++#include <unistd.h>
++#include <arpa/inet.h>
++#include <err.h>
++
++#define IH_NMLEN 32
++
++typedef struct image_header {
++	uint32_t	ih_magic;	/* Image Header Magic Number	*/
++	uint32_t	ih_hcrc;	/* Image Header CRC Checksum	*/
++	uint32_t	ih_time;	/* Image Creation Timestamp	*/
++	uint32_t	ih_size;	/* Image Data Size		*/
++	uint32_t	ih_load;	/* Data	 Load  Address		*/
++	uint32_t	ih_ep;		/* Entry Point Address		*/
++	uint32_t	ih_dcrc;	/* Image Data CRC Checksum	*/
++	uint8_t		ih_os;		/* Operating System		*/
++	uint8_t		ih_arch;	/* CPU architecture		*/
++	uint8_t		ih_type;	/* Image Type			*/
++	uint8_t		ih_comp;	/* Compression Type		*/
++	uint8_t		ih_name[IH_NMLEN];	/* Image Name		*/
++} image_header_t;
++
++
++int main(int argc, char *argv[])
++{
++    if (argc < 3) 
++        errx(1, "syntax: %s datasize datacrc [hdrcrc]\n", argv[0]);
++        
++    struct image_header h = {
++        0x56190527, // magic
++        (argc>=4) ? htonl(strtoul(argv[3], NULL, 16)) : 0, // header crc, hex
++        0, // timestamp
++        htonl(strtoul(argv[2], NULL, 10)), // data size, decimal
++        0, // load addr
++        0, // entry point
++        htonl(strtoul(argv[1], NULL, 16)), // data crc, hex
++        5, // os
++        2, // arm
++        3, // ramdisk
++        0, // comp
++        "ram0" // fname
++    };
++    
++    if (write(1, &h, sizeof(h)) != sizeof(h))
++        err(1, "write()");
++
++    return 0;
++}
+diff --git a/rsa-pubkey-to-include.sh b/rsa-pubkey-to-include.sh
+new file mode 100755
+index 0000000..5a71e8c
+--- /dev/null
++++ b/rsa-pubkey-to-include.sh
+@@ -0,0 +1,5 @@
++#!/bin/bash
++
++[ -z "$1" ] && { echo syntax: "$0" privkey.pem; exit 1; }
++
++openssl rsa -in "$1" -modulus -noout | cut -d = -f 2 | xxd -r -ps | xxd -i
+diff --git a/tools/ImageGenarator/Makefile b/tools/ImageGenarator/Makefile
+index f8ad47e..966769a 100644
+--- a/tools/ImageGenarator/Makefile
++++ b/tools/ImageGenarator/Makefile
+@@ -1,7 +1,7 @@
+ all: clean header
+ 
+ header:
+-	$(CC) c2k_image_gen.c -o c2k_image_gen
++	gcc c2k_image_gen.c -o c2k_image_gen
+ 
+ install:
+ 	cp mk_c2k_image.sh /usr/local/bin/
+diff --git a/tools/ImageGenarator/c2k_image_gen.c b/tools/ImageGenarator/c2k_image_gen.c
+index 813d899..8a91bd2 100644
+--- a/tools/ImageGenarator/c2k_image_gen.c
++++ b/tools/ImageGenarator/c2k_image_gen.c
+@@ -6,6 +6,8 @@
+ #include "header.h"
+ #include <fcntl.h>
+ #include <sys/types.h>
++#include <unistd.h>
++#include <ctype.h>
+ 
+ #define MAX_KEY_FILE_SIZE 	(1024+1) //It can hold 4096 bit key in ascii string
+ 
+diff --git a/tools/ImageGenarator/hdr_gen_cfg b/tools/ImageGenarator/hdr_gen_cfg
+index 8c3fb05..bf563fd 100644
+--- a/tools/ImageGenarator/hdr_gen_cfg
++++ b/tools/ImageGenarator/hdr_gen_cfg
+@@ -38,27 +38,27 @@
+ #	Sample configurations
+ #
+ #	  To generate uboot image with NULL hash
+-#		null:::uboot.bin::
++#		null:::u-boot.bin::
+ #
+ #	  To generate firmware image with SHA256
+-#		mk_c2kimage.sh sha256 uboot.bin
+-#		sha256:::uboot.bin::
++#		mk_c2kimage.sh sha256 u-boot.bin
++#		sha256:::u-boot.bin::
+ #
+ #	  To generate firmware image with RSA signature and key inbuilt to the header
+-#		rsa:private.pem:insertkey:uboot.bin::
++#		rsa:private.pem:insertkey:u-boot.bin::
+ #
+ #	  To generate firmware image with RSA signature and no key inserted in the header
+-#		rsa:private.pem:nokey:uboot.bin::
++#		rsa:private.pem:nokey:u-boot.bin::
+ #
+ #	  To generate uboot image with AES-128 encryption and RSA signature and key inbuilt to the header
+-#		aes-rsa:private.pem:insertkey:uboot.bin:128:
++#		aes_rsa:private.pem:insertkey:u-boot.bin:128:
+ #
+ #	  To generate uboot image with AES-128 encryption and RSA signature and no key inserted in the header
+-#		aes-rsa:private.pem:nokey:uboot.bin:128:
++#		aes_rsa:private.pem:nokey:u-boot.bin:128:
+ #
+ #	  To generate uboot image with AES-256 encryption and RSA signature and key inbuilt to the header
+-#		aes-rsa:private.pem:insertkey:uboot.bin:256:
++#		aes_rsa:private.pem:insertkey:u-boot.bin:256:
+ #
+ #	  To generate uboot image with AES-256 encryption and RSA signature and no key inserted in the header
+-#		aes-rsa:private.pem:nokey:uboot.bin:256:
++#		aes_rsa:private.pem:nokey:u-boot.bin:256:
+ null:::u-boot.bin::
+diff --git a/tools/ImageGenarator/mk_c2kimage.sh b/tools/ImageGenarator/mk_c2kimage.sh
+old mode 100644
+new mode 100755
+index 18520d2..dbd1336
+--- a/tools/ImageGenarator/mk_c2kimage.sh
++++ b/tools/ImageGenarator/mk_c2kimage.sh
+@@ -1,4 +1,4 @@
+-#!/bin/sh
++#!/bin/bash
+ ################################################################################
+ # This script generates c2k images(that includes image header) from the standard
+ # binary file. It can generates header with NULL, SHA256, RSA signatures, and
+@@ -30,6 +30,8 @@
+ # Note: RSA key size is determined from the given private key.
+ ################################################################################
+ 
++set -eo pipefail
++
+ usage()
+ {
+ 	echo "Usage..."
+@@ -65,6 +67,8 @@ clean_exit()
+ 
+ check_image()
+ {
++    set -eo pipefail
++
+ 	if [ "$1" = "" ]; then
+ 		usage
+ 		clean_exit 1
+@@ -82,6 +86,8 @@ check_image()
+ # $2 file name to store hash
+ calculate_c2k_hash()
+ {
++    set -eo pipefail
++
+ 	img_size=$(stat -c%s $1)
+ 	part_size=$(((252*1024)))
+ 	tmp_hash_file=`mktemp` || exit 1
+@@ -198,7 +204,7 @@ aes_rsa*)
+ 	echo $aes_iv > $aes_iv_file
+ 
+ 	echo "************VERY IMPORTANT*************"
+-	echo "Program this AES key $aes_key into OTP area stored in aes.key file"
++	echo "Program this AES key (aes_${aes_key_size}_plain.key) into OTP area stored in aes.key file"
+ 
+ 	#Calculate SHA256 hash on fw file.
+ 	if [ ! -e $private_key ]; then
+diff --git a/tools/ImageGenarator/uboot_gen.sh b/tools/ImageGenarator/uboot_gen.sh
+old mode 100644
+new mode 100755
+index 0905ef8..be1e2f5
+--- a/tools/ImageGenarator/uboot_gen.sh
++++ b/tools/ImageGenarator/uboot_gen.sh
+@@ -1,4 +1,6 @@
+-#!/bin/sh
++#!/bin/bash
++
++set -eo pipefail
+ 
+ while IFS=: read f1 f2 f3 f4 f5
+ do
+@@ -9,21 +11,20 @@ field4=$f4
+ field5=$f5
+ done < hdr_gen_cfg
+ 
+-make clean;make header
++make clean; make header
+ 
+ echo "Generating uboot Image" 
+-sh mk_c2kimage.sh $field1 $field2 $field3 $field4 $field5
++bash mk_c2kimage.sh $field1 $field2 $field3 $field4 $field5
++
+ if [ "$field1" = "aes_rsa" ]; then
+-  mv -v $field4.enc.c2kimg ../../u-boot.bin
++    mv -v $field4.enc.c2kimg ../../u-boot.bin
+ else
+-  mv -v $field4.c2kimg ../../u-boot.bin
++    mv -v $field4.c2kimg ../../u-boot.bin
+ fi
+-echo "Done.\n\n"
+ 
+ echo "Removing uboot original Image" 
+ if [ "$field1" = "aes_rsa" ]; then
+-rm u-boot.bin u-boot.bin.enc *.key *.rawkey *.pem publickeyhash-*
++    rm -f u-boot.bin u-boot.bin.enc *.key *.rawkey *.pem publickeyhash-*
+ else
+-rm u-boot.bin *.key *.rawkey *.pem publickeyhash-*
++    rm -f u-boot.bin *.key *.rawkey *.pem publickeyhash-*
+ fi
+-echo "Done.\n\n"

@@ -1,0 +1,6 @@
+SOURCE:This has been taken from barrier breaker packages 14.07 of revison 44441
+URL:https://dev.openwrt.org/browser/branches/packages_14.07/utils/lvm2?rev=44441
+SUPPORT : LVM2 refers to a new userspace toolset that provide logical volume management facilities on linux.
+Changes:
+None
+

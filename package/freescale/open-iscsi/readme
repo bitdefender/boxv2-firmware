@@ -1,0 +1,6 @@
+SOURCE: This package is taken from open-iscsi.org.
+SOURE URL: Stable release open-iscsi-2.0-873.tar.gz from http://www.open-iscsi.org/  
+DESCRIPTION: iSCSI initiator package
+CHANGES:
+1. Makefile constructed as per openwrt requirement
+2. Removed "static" from  CFLAGS

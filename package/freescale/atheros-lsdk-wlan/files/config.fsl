@@ -1,0 +1,207 @@
+#
+# Copyright (c) 2013 Qualcomm Atheros, Inc.
+# All Rights Reserved.
+# Qualcomm Atheros Confidential and Proprietary.
+#
+# The configure file for Mindspeed platform
+# 
+# THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+# WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+# MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+# ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+# WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+# ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+# OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+#
+# Set the toolchain path
+export TOOLCHAIN=gcc
+export TOOLPREFIX=arm-openwrt-linux-gnueabi-
+export TOOLARCH=build_arm
+
+export KERNEL=custom
+export KERNELVER=3.2.54
+export KERNELTARGET=none
+export COMPRESSKERNEL=y
+export KERNELARCH=arm
+
+export AP_TYPE=dual
+export BUSYBOX=none
+export WIRELESSTOOLS=wireless_tools.29
+export WIRELESSTOOLSLIB=libiw.so.29
+
+#
+# Enable the "new" hostapd
+#
+
+export BUILD_WPA2=y
+#for station forwarding support
+export CONFIG_ETHERSTA=y
+export BUILD_WPA2_NO_EXAMPLES=y
+#
+# UMAC build option
+#
+
+export BUILD_UMAC=1
+#enable radio measurement support for voice enterprise
+export UMAC_SUPPORT_RRM=1
+
+export UMAC_SUPPORT_WNM=1
+
+
+export BUS=PCI
+export TARGETARCH=armv7-le-elf
+
+#
+# Set a large file size image to take advantage of the 8 MB part by default
+#
+
+export TARGETFSSIZE=0x600000
+
+
+#
+# Select the support required for this board
+#
+
+export AH_SUPPORT_AR5210=0
+export AH_SUPPORT_AR5211=0
+export AH_SUPPORT_AR5212=1
+export AH_SUPPORT_AR5416=1
+export AH_SUPPORT_5111=1
+export AH_SUPPORT_5112=1
+export AH_SUPPORT_2413=1
+export AH_SUPPORT_5413=1
+export AH_SUPPORT_2316=1
+export AH_SUPPORT_2317=1
+export AH_SUPPORT_2425=1
+export AH_SUPPORT_2133=1  
+
+export AH_SUPPORT_AR9300=1
+#
+# Environmental variables used to configure the HAL/ATH layers at compile time
+#
+
+export ATH_CAP_PHYERR_DIAG=1
+export AR5416_G_MODE=1
+export AH_SUPPORT_HOWL=0
+export AH_SUPPORT_OWL=1
+export AH_DEBUG=1
+export AH_REGOPS_FUNC=0
+export AH_DEBUG_ALQ=0
+export AR5416_INT_MITIGATION=1
+export ATH_SUPPORT_DFS=1
+export ATH_SUPPORT_IQUE=1
+export IEEE_MCAST_ENHANCEMENT=1
+export ATH_SUPPORT_TX_BACKLOG=1
+export ATH_WPS_IE=1
+export ATH_CAP_AMSDU=0
+export ATH_SUPPORT_CWM=1
+export ATH_CAP_CWM=1
+export ATH_CHAINMASK_SELECT=0
+export ATH_RXBUF=512
+export ATH_TXBUF=512
+export ATH_RB=0
+
+#turn on ap-only code
+export UMAC_SUPPORT_APONLY=1
+export ATH_WDS_SUPPORT_APONLY=1
+export NO_SIMPLE_CONFIG=1
+export ATH_ADDITIONAL_STATS=1
+
+export ATH_SUPPORT_WIFIPOS=0
+export ATH_SUPPORT_RX_PROC_QUOTA=0
+
+export ATH_SUPPORT_DESC_CACHABLE=0
+export ATH_SUPPORT_POWER=1
+export ATH_TXQ_BH_LOCK=1
+
+export ATH_DEBUG=1
+export ATH_TX_COMPACT=1
+export ATH_INT_TX_MITIGATION=0
+
+export UMAC_SUPPORT_NAWDS=1
+export UMAC_SUPPORT_TX_FRAG=1
+export ATH_SUPPORT_MCAST2UCAST=1
+
+
+# video over wireless, featuer and debug flags
+#   ATH_SUPPORT_VOWEXT - All vow feature enable/disable
+#   ATH_VOW_EXT_STATS  - Extended stats for capdumpts and graph plotter utilities 
+export ATH_SUPPORT_VOWEXT=0
+export ATH_VOW_EXT_STATS=0
+export UMAC_SUPPORT_RPTPLACEMENT=0
+
+ifeq ($(ATH_SUPPORT_VOWEXT), 1)
+export ATH_TXBUF=1536
+endif
+
+
+# TID scheduling enabled
+export VOW_TIDSCHED=0
+# Latency logging disabled
+export VOW_LOGLATENCY=0
+
+#extended AP support ( 3 address WDS )
+export ATH_EXT_AP=1
+# 802.1q vlan support for wlan driver
+export ATH_SUPPORT_VLAN=0
+export ATH_SUPPORT_TxBF=1
+export ATH_SUPPORT_QUICK_KICKOUT=1
+
+#11ac related
+export UMAC_SUPPORT_APONLY=1
+export UMAC_SUPPORT_VAP_PAUSE=1
+export ATH_VAP_PAUSE_SUPPORT=1
+export ATH_PERF_PWR_OFFLOAD=1
+export ATH_11AC_TXCOMPACT=1
+export QCA_OL_11AC_FAST_PATH=1
+#10.1.436
+export ATH_SUPPORT_KEYPLUMB_WAR=1
+export ATH_SUPPORT_WEP_MBSSID=1
+export ATH_HW_TXQ_STUCK_WAR=1
+export ATH_SUPPORT_TIDSTUCK_WAR=1
+# S/W retry mechanism (in addition to H/W retries) +
+# TID queue pause/unpause and ps-poll handling in LMAC
+export ATH_SWRETRY=1
+# ATH_SWRETRY_MODIFY_DSTMASK enables HW optimization to filter pkts on
+# failures.
+export ATH_SWRETRY_MODIFY_DSTMASK=0
+
+# RX looplimit Support
+export ATH_GEN_TIMER=0
+export ATH_RX_LOOPLIMIT_TIMER=0
+export ATH_SUPPORT_RX_PROC_QUOTA=0
+#following are not supported in 11ac yet
+export UMAC_SUPPORT_WNM=0
+export UMAC_SUPPORT_QUIET=1
+
+export ATH_TGT_TYPE=AR9888
+export ATH_HIF_TYPE=pci
+export FORCE_LEGACY_PCI_INTERRUPTS=0
+export LOAD_ARRAY_FW=1
+#export BIG_ENDIAN_HOST=1
+export WDI_EVENT_ENABLE=1
+
+# 0: 128B - default, 1: 256B, 2: 64B
+export ATH_OL_11AC_DMA_BURST=1
+export ATH_OL_11AC_MAC_AGGR_DELIM=1
+
+#enable CFEND support
+export ATH_SUPPORT_CFEND=1
+export ATH_SUPPORT_DESCFAST=1
+
+#override the default kernel environment
+
+export ATH_BEACON_DEFERRED_PROC=1
+
+export ENDIAN=AH_LITTLE_ENDIAN
+export DIRECT_ATTACH=1
+export NO_SIMPLE_CONFIG=1
+
+# Spectral Analysis support
+export ATH_SUPPORT_SPECTRAL=0
+
+
+#Use athr-hostapd
+export BUILD_ATHR_HOSTAP=1
+
+export ATH_USE_NCNB=1

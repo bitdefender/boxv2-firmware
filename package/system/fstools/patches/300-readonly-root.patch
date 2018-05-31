@@ -1,0 +1,30 @@
+Index: fstools-2015-05-24/mount_root.c
+===================================================================
+--- fstools-2015-05-24.orig/mount_root.c
++++ fstools-2015-05-24/mount_root.c
+@@ -60,7 +60,8 @@ start(int argc, char *argv[1])
+ {
+ 	struct volume *root;
+ 	struct volume *data = volume_find("rootfs_data");
+-    char buff[10] = {};
++	unsigned long mount_flags = MS_NOATIME | MS_REMOUNT | MS_I_VERSION;
++	char buff[10] = {};
+ 
+ 	if (!getenv("PREINIT"))
+ 		return -1;
+@@ -68,8 +69,12 @@ start(int argc, char *argv[1])
+ 	if (!data) {
+ 		root = volume_find("rootfs");
+ 		volume_init(root);
+-		ULOG_NOTE("mounting /dev/root\n");
+-		mount("/dev/root", "/", NULL, MS_NOATIME | MS_REMOUNT | MS_I_VERSION, 0);
+-		if (get_cmdline_val("bdbox.bootstrap", buff, sizeof(buff))) {
++		if (get_cmdline_val("bdbox.ro_root", buff, sizeof(buff))) {
++			mount_flags |= MS_RDONLY;
++			ULOG_INFO("mounting /dev/root (read-only)");
++		} else
++			ULOG_INFO("mounting /dev/root");
++		mount("/dev/root", "/", NULL, mount_flags, 0);
++		if ((mount_flags & MS_RDONLY) == MS_RDONLY || get_cmdline_val("bdbox.bootstrap", buff, sizeof(buff))) {
+ 			ULOG_INFO("Mounting ramfs overlay");
+ 			return ramoverlay();

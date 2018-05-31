@@ -1,0 +1,11 @@
+diff -Naur -x '*elf' barebox-2011.06.0/arch/arm/boards/comcerto-mfcnevm/env/config barebox-2011.6.0_mod/arch/arm/boards/comcerto-mfcnevm/env/config
+--- barebox-2011.06.0/arch/arm/boards/comcerto-mfcnevm/env/config	2016-03-31 14:51:46.000000000 +0530
++++ barebox-2011.6.0_mod/arch/arm/boards/comcerto-mfcnevm/env/config	2016-03-31 14:49:25.000000000 +0530
+@@ -63,6 +63,6 @@
+ 
+ usb3_internal_clk="yes"
+ 
+-bootargs="console=ttyS0,115200n8, init=/etc/preinit"
++bootargs="console=ttyS0,115200n8, init=/etc/preinit coherent_pool=16M"
+ bootargs="$bootargs mac_addr=$eth0.ethaddr,$eth1.ethaddr,$eth2.ethaddr"
+ 

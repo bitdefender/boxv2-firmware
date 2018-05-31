@@ -1,0 +1,53 @@
+Index: linux-3.19.3/drivers/mtd/ubi/attach.c
+===================================================================
+--- linux-3.19.3.orig/drivers/mtd/ubi/attach.c
++++ linux-3.19.3/drivers/mtd/ubi/attach.c
+@@ -839,6 +839,9 @@ static int scan_peb(struct ubi_device *u
+ 	switch (err) {
+ 	case 0:
+ 		break;
++	case UBI_IO_BBT_PEB:
++		ai->bad_peb_count += 1;
++		return 0;
+ 	case UBI_IO_BITFLIPS:
+ 		bitflips = 1;
+ 		break;
+Index: linux-3.19.3/drivers/mtd/ubi/io.c
+===================================================================
+--- linux-3.19.3.orig/drivers/mtd/ubi/io.c
++++ linux-3.19.3/drivers/mtd/ubi/io.c
+@@ -707,6 +707,9 @@ bad:
+ 	return 1;
+ }
+ 
++#define BBT0_MAGIC 0x42627430 // Bbt0
++#define BBT1_MAGIC 0x31746242 // 1tbB
++
+ /**
+  * ubi_io_read_ec_hdr - read and check an erase counter header.
+  * @ubi: UBI device description object
+@@ -755,6 +758,12 @@ int ubi_io_read_ec_hdr(struct ubi_device
+ 	}
+ 
+ 	magic = be32_to_cpu(ec_hdr->magic);
++
++    if (magic == BBT0_MAGIC || magic == BBT1_MAGIC) {
++		ubi_warn(ubi, "PEB %d is BBT", pnum);
++		return UBI_IO_BBT_PEB;
++    }
++
+ 	if (magic != UBI_EC_HDR_MAGIC) {
+ 		if (mtd_is_eccerr(read_err))
+ 			return UBI_IO_BAD_HDR_EBADMSG;
+Index: linux-3.19.3/drivers/mtd/ubi/ubi.h
+===================================================================
+--- linux-3.19.3.orig/drivers/mtd/ubi/ubi.h
++++ linux-3.19.3/drivers/mtd/ubi/ubi.h
+@@ -114,6 +114,7 @@ enum {
+ 	UBI_IO_BAD_HDR,
+ 	UBI_IO_BAD_HDR_EBADMSG,
+ 	UBI_IO_BITFLIPS,
++	UBI_IO_BBT_PEB,
+ };
+ 
+ /*

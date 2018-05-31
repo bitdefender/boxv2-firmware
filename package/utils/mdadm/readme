@@ -1,0 +1,6 @@
+SOURCE : mdadm 3.2.5 version package from Openwrt Attitude Adjustment 12.09 packages base and SVN revision is 36089
+SOURCE PATH : https://dev.openwrt.org/browser/branches/packages_12.09/utils/mdadm/?rev=36089
+SUPPORT : A tool for managing Soft RAID under Linux
+
+Changes:
+1. Add configuration file that prevent scanning non HDD devices.

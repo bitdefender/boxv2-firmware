@@ -1,0 +1,14 @@
+#!/bin/sh /etc/rc.common
+# Copyright (C) 2007 Mindspeed Technologies
+
+start() {
+        echo 1 > /proc/sys/net/ipv6/conf/all/forwarding || exit 1
+
+	cp /etc/MLD_Proxy.cfg /tmp
+	cd /tmp
+	/sbin/MLD_Proxy
+}
+
+stop() {
+	killall MLD_Proxy
+}

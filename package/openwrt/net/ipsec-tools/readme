@@ -1,0 +1,15 @@
+SOURCE:This has been taken from barrier breaker packages 14.07 of revison 44441
+URL:https://dev.openwrt.org/browser/branches/packages_14.07/net/ipsec-tools?rev=44441
+SUPPORT : IPsec management tools
+
+Changes:
+
+1.004-MSPD-ipsec-natt-racoon.patch patch in AA is not required here As the Change is reflected indirectly
+2.007-FSL-force_HAVE_POLICY_FWD.patch added to configure fwd rule. This patch took from the below link
+   https://dev.openwrt.org/ticket/14141
+   https://github.com/nmeyerhans/packages/commit/cc919289a37e66687144dbf5fdb9398a7465e5bc
+
+
+GUI CHECK:
+
+1.GUI Support need to be added .It is pending

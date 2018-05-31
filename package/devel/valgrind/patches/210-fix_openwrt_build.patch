@@ -1,0 +1,26 @@
+Index: valgrind-3.10.0/configure.ac
+===================================================================
+--- valgrind-3.10.0.orig/configure.ac
++++ valgrind-3.10.0/configure.ac
+@@ -141,6 +141,9 @@ case "${is_clang}-${gcc_version}" in
+      notclang-5.*)
+ 	AC_MSG_RESULT([ok (${gcc_version})])
+ 	;;
++     notclang-6.*)
++	AC_MSG_RESULT([ok (${gcc_version})])
++	;;
+      clang-2.9|clang-3.*|clang-4.*)
+ 	AC_MSG_RESULT([ok (clang-${gcc_version})])
+ 	;;
+@@ -217,6 +220,11 @@ case "${host_cpu}" in
+ 	ARCH_MAX="arm"
+ 	;;
+ 
++     arm)
++       AC_MSG_RESULT([ok (${host_cpu})])
++       ARCH_MAX="arm"
++       ;;
++
+      aarch64*)
+        AC_MSG_RESULT([ok (${host_cpu})])
+        ARCH_MAX="arm64"

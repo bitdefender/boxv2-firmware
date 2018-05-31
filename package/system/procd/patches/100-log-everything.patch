@@ -1,0 +1,11 @@
+--- a/log.h	2017-05-29 19:07:09.068701773 +0300
++++ b/log.h	2017-05-29 19:06:50.268678483 +0300
+@@ -18,7 +18,7 @@
+ #include <libubox/ulog.h>
+ 
+ #define DEBUG(level, fmt, ...) do { \
+-	if (debug >= level) { \
++	if (debug >= 0) { \
+ 		ulog(LOG_DEBUG, fmt, ## __VA_ARGS__); \
+ 	} } while (0)
+ 

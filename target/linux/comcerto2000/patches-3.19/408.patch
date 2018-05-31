@@ -1,0 +1,66 @@
+From f27ca140ad82b5e76282cc5b54bfb0a665520d17 Mon Sep 17 00:00:00 2001
+From: Richard Weinberger <richard@nod.at>
+Date: Tue, 7 Oct 2014 16:31:22 +0200
+Subject: UBI: Fastmap: Fix race in ubi_eba_atomic_leb_change()
+
+[ Upstream commit 36a87e44f642966442fd0d23f2ec536851e00236 ]
+
+This function a) requests a new PEB, b) writes data to it,
+c) returns the old PEB and d) registers the new PEB in the EBA table.
+
+For the non-fastmap case this works perfectly fine and is powercut safe.
+Is fastmap enabled this can lead to issues.
+If a new fastmap is written between a) and c) the freshly requested PEB
+is no longer in a pool and will not be scanned upon attaching.
+If now a powercut happens between c) and d) the freshly requested PEB
+will not be scanned and the old one got already scheduled for erase.
+After attaching the EBA table will point to a erased PEB.
+
+Fix this issue by swapping steps c) and d).
+
+Signed-off-by: Richard Weinberger <richard@nod.at>
+Signed-off-by: Sasha Levin <sasha.levin@oracle.com>
+---
+ drivers/mtd/ubi/eba.c | 15 ++++++++-------
+ 1 file changed, 8 insertions(+), 7 deletions(-)
+
+diff --git a/drivers/mtd/ubi/eba.c b/drivers/mtd/ubi/eba.c
+index 0aa7087..e40db2f 100644
+--- a/drivers/mtd/ubi/eba.c
++++ b/drivers/mtd/ubi/eba.c
+@@ -861,7 +861,7 @@ write_error:
+ int ubi_eba_atomic_leb_change(struct ubi_device *ubi, struct ubi_volume *vol,
+ 			      int lnum, const void *buf, int len)
+ {
+-	int err, pnum, tries = 0, vol_id = vol->vol_id;
++	int err, pnum, old_pnum, tries = 0, vol_id = vol->vol_id;
+ 	struct ubi_vid_hdr *vid_hdr;
+ 	uint32_t crc;
+ 
+@@ -924,16 +924,17 @@ retry:
+ 		goto write_error;
+ 	}
+ 
+-	if (vol->eba_tbl[lnum] >= 0) {
+-		err = ubi_wl_put_peb(ubi, vol_id, lnum, vol->eba_tbl[lnum], 0);
+-		if (err)
+-			goto out_leb_unlock;
+-	}
+-
+ 	down_read(&ubi->fm_sem);
++	old_pnum = vol->eba_tbl[lnum];
+ 	vol->eba_tbl[lnum] = pnum;
+ 	up_read(&ubi->fm_sem);
+ 
++	if (old_pnum >= 0) {
++		err = ubi_wl_put_peb(ubi, vol_id, lnum, old_pnum, 0);
++		if (err)
++			goto out_leb_unlock;
++	}
++
+ out_leb_unlock:
+ 	leb_write_unlock(ubi, vol_id, lnum);
+ out_mutex:
+-- 
+cgit v1.1
+

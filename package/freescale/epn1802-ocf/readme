@@ -1,0 +1,4 @@
+This is freescale specific package.
+
+Changes:
+In Makefile added dependency on kmod-crypto-ocf.Without this during package formation it is throwing missing dependencies errors

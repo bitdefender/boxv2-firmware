@@ -1,0 +1,16 @@
+#
+# Copyright (C) 2012 Mindspeed Technologies
+#
+# This is free software, licensed under the GNU General Public License v2.
+# See /LICENSE for more information.
+#
+
+if PACKAGE_samba4-server
+config PACKAGE_SAMBA4_MAX_DEBUG_LEVEL
+	int "Maximum level of compiled-in debug messages"
+	default -1
+config PACKAGE_SAMBA4_SMB_SPLICE
+	bool "Mindspeed SMB Splice support"
+	default y
+endif
+

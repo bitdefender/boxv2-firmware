@@ -1,0 +1,147 @@
+diff -ur iperf-2.0.5/include/gnu_getopt.h iperf-2.0.5.new/include/gnu_getopt.h
+--- iperf-2.0.5/include/gnu_getopt.h	2007-08-29 23:57:27.000000000 +0200
++++ iperf-2.0.5.new/include/gnu_getopt.h	2012-06-15 15:13:46.097665313 +0200
+@@ -30,8 +30,8 @@
+  * $Id: gnu_getopt.h,v 1.1.1.1 2004/05/18 01:50:44 kgibbs Exp $
+  */
+ 
+-#ifndef _GETOPT_H
+-    #define _GETOPT_H 1
++#ifndef _GNU_GETOPT_H
++    #define _GNU_GETOPT_H 1
+ 
+     #ifdef	__cplusplus
+ extern "C" {
+@@ -92,7 +92,7 @@
+ /* has_arg can't be an enum because some compilers complain about
+    type mismatches in all the code that assumes it is an int.  */
+ 
+-struct option {
++struct gnu_option {
+     const char *name;
+     int has_arg;
+     int *flag;
+@@ -112,20 +112,20 @@
+ int gnu_getopt_long( int argc,
+                      char *const *argv,
+                      const char *shortopts,
+-                     const struct option *longopts,
++                     const struct gnu_option *longopts,
+                      int *longind );
+ 
+ int gnu_getopt_long_only( int argc,
+                           char *const *argv,
+                           const char *shortopts,
+-                          const struct option *longopts,
++                          const struct gnu_option *longopts,
+                           int *longind );
+ 
+ /* Internal only.  Users should not call this directly.  */
+ int _gnu_getopt_internal( int argc,
+                           char *const *argv,
+                           const char *shortopts,
+-                          const struct option *longopts,
++                          const struct gnu_option *longopts,
+                           int *longind,
+                           int long_only );
+ 
+@@ -133,4 +133,4 @@
+ } /* end extern "C" */
+     #endif
+ 
+-#endif /* _GETOPT_H */
++#endif /* _GNU_GETOPT_H */
+diff -ur iperf-2.0.5/src/gnu_getopt.c iperf-2.0.5.new/src/gnu_getopt.c
+--- iperf-2.0.5/src/gnu_getopt.c	2007-08-29 23:57:27.000000000 +0200
++++ iperf-2.0.5.new/src/gnu_getopt.c	2012-06-15 15:13:46.489051585 +0200
+@@ -343,7 +343,7 @@
+ _gnu_getopt_internal( int argc,
+                       char *const *argv,
+                       const char *optstring,
+-                      const struct option *longopts,
++                      const struct gnu_option *longopts,
+                       int *longind,
+                       int long_only ) {
+     gnu_optarg = NULL;
+@@ -452,8 +452,8 @@
+          && (argv[gnu_optind][1] == '-'
+              || (long_only && (argv[gnu_optind][2] || !my_index (optstring, argv[gnu_optind][1])))) ) {
+         char *nameend;
+-        const struct option *p;
+-        const struct option *pfound = NULL;
++        const struct gnu_option *p;
++        const struct gnu_option *pfound = NULL;
+         int exact = 0;
+         int ambig = 0;
+         int indfound = -1;
+@@ -592,8 +592,8 @@
+         /* Convenience. Treat POSIX -W foo same as long option --foo */
+         if ( temp[0] == 'W' && temp[1] == ';' ) {
+             char *nameend;
+-            const struct option *p;
+-            const struct option *pfound = NULL;
++            const struct gnu_option *p;
++            const struct gnu_option *pfound = NULL;
+             int exact = 0;
+             int ambig = 0;
+             int indfound = 0;
+@@ -738,7 +738,7 @@
+              char *const *argv,
+              const char *optstring ) {
+     return _gnu_getopt_internal (argc, argv, optstring,
+-                                 (const struct option *) 0,
++                                 (const struct gnu_option *) 0,
+                                  (int *) 0,
+                                  0);
+ }
+diff -ur iperf-2.0.5/src/gnu_getopt_long.c iperf-2.0.5.new/src/gnu_getopt_long.c
+--- iperf-2.0.5/src/gnu_getopt_long.c	2007-08-29 23:57:27.000000000 +0200
++++ iperf-2.0.5.new/src/gnu_getopt_long.c	2012-06-15 15:13:47.262561528 +0200
+@@ -46,7 +46,7 @@
+ gnu_getopt_long( int argc,
+                  char *const *argv,
+                  const char *options,
+-                 const struct option *long_options,
++                 const struct gnu_option *long_options,
+                  int *opt_index ) {
+     return _gnu_getopt_internal (argc, argv, options, long_options, opt_index, 0);
+ }
+@@ -60,7 +60,7 @@
+ gnu_getopt_long_only( int argc,
+                       char *const *argv,
+                       const char *options,
+-                      const struct option *long_options,
++                      const struct gnu_option *long_options,
+                       int *opt_index ) {
+     return _gnu_getopt_internal (argc, argv, options, long_options, opt_index, 1);
+ }
+@@ -85,7 +85,7 @@
+ while ( 1 ) {
+     int this_option_optind = gnu_optind ? gnu_optind : 1;
+     int option_index = 0;
+-    static struct option long_options[] =
++    static struct gnu_option long_options[] =
+     {
+         {"add", 1, 0, 0},
+         {"append", 0, 0, 0},
+diff -ur iperf-2.0.5/src/Settings.cpp iperf-2.0.5.new/src/Settings.cpp
+--- iperf-2.0.5/src/Settings.cpp	2010-07-09 03:05:46.000000000 +0200
++++ iperf-2.0.5.new/src/Settings.cpp	2012-06-15 15:14:32.910130715 +0200
+@@ -81,7 +81,7 @@
+  * ------------------------------------------------------------------- */
+ #define LONG_OPTIONS()
+ 
+-const struct option long_options[] =
++const struct gnu_option long_options[] =
+ {
+ {"singleclient",     no_argument, NULL, '1'},
+ {"bandwidth",  required_argument, NULL, 'b'},
+@@ -126,7 +126,7 @@
+ 
+ #define ENV_OPTIONS()
+ 
+-const struct option env_options[] =
++const struct gnu_option env_options[] =
+ {
+ {"IPERF_SINGLECLIENT",     no_argument, NULL, '1'},
+ {"IPERF_BANDWIDTH",  required_argument, NULL, 'b'},

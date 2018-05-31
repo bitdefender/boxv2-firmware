@@ -1,0 +1,20 @@
+SOURCE: net-tools package of version 1.60 is taken from Openwrt Chaos calmer base packages
+	Openwrt package repository for Chaos Calmer have the same package version as that BB
+       
+CC Info: 
+commit 6c0569db46d8b53d0fd12b08c3cda70f691f0d60
+Author: nico <nico@3c298f89-4303-0410-b956-a3cf2f4a3e73>
+Date:   Sat Apr 18 23:46:37 2015 +0000
+Title: sctp: moved to github
+
+BB Info:
+SOURCE:This has been taken from barrier breaker packages 14.07 of revison 44441
+URL:https://dev.openwrt.org/browser/branches/packages_14.07/net/net-tools?rev=44441
+
+Version is same as AA but PKG_Release is different AA Package Release is 2
+BB Pkg_Release is 3
+
+Changes:
+1. 003-FSL_ifconfig_netmask_prefix_support.patch
+	- To support netmask prefix support for ifconfig command. It took from below URL
+	https://www.redhat.com/archives/rhl-devel-list/2004-September/msg00048.html

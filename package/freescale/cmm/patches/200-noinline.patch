@@ -1,0 +1,13 @@
+Index: cmm-5.07.2/src/module_natpt.c
+===================================================================
+--- cmm-5.07.2.orig/src/module_natpt.c
++++ cmm-5.07.2/src/module_natpt.c
+@@ -302,7 +302,7 @@ print_help:
+ }
+ 
+ 
+-int inline  NATPT_Socket_init(int sock, FCI_CLIENT* fci_handle)
++int NATPT_Socket_init(int sock, FCI_CLIENT* fci_handle)
+ {
+ 	struct socket *s;
+ 	int rc = 0;

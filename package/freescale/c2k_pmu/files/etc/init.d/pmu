@@ -1,0 +1,11 @@
+#!/bin/sh /etc/rc.common
+# Copyright (C) 2008 OpenWrt.org
+
+start() {
+	insmod c2k_pmu
+	echo 1 > /sys/bus/platform/drivers/css/css.0/load
+}
+
+stop(){
+	rmmod c2k_pmu
+}

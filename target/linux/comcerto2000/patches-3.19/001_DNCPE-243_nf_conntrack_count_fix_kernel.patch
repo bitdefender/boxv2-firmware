@@ -1,0 +1,28 @@
+diff -Naur linux-3.19.3_a/net/netfilter/nf_conntrack_core.c linux-3.19.3_b/net/netfilter/nf_conntrack_core.c
+--- linux-3.19.3_a/net/netfilter/nf_conntrack_core.c	2017-11-23 14:54:22.498921857 +0000
++++ linux-3.19.3_b/net/netfilter/nf_conntrack_core.c	2017-11-23 14:58:29.823768219 +0000
+@@ -377,8 +377,11 @@
+ 		rcu_read_unlock();
+ 		return false;
+ 		}
+-		nf_conntrack_ecache_work(nf_ct_net(ct));
+-		set_bit(IPS_DYING_BIT, &ct->status);
++		if(!nf_ct_is_dying(ct))
++		{
++			nf_conntrack_ecache_work(nf_ct_net(ct));
++			set_bit(IPS_DYING_BIT, &ct->status);
++		}
+ 		nf_ct_delete_from_lists(ct);
+ 		nf_ct_put(ct);
+ 	} else {
+diff -Naur linux-3.19.3_a/net/netfilter/nf_conntrack_netlink.c linux-3.19.3_b/net/netfilter/nf_conntrack_netlink.c
+--- linux-3.19.3_a/net/netfilter/nf_conntrack_netlink.c	2017-11-23 14:54:22.498921857 +0000
++++ linux-3.19.3_b/net/netfilter/nf_conntrack_netlink.c	2017-11-23 14:59:33.783987185 +0000
+@@ -1922,6 +1922,7 @@
+ 		 * message. Don't broadcast the event and don't update the ct */
+ 		err = ctnetlink_change_permanent(ct, cda);
+ 		if ((err == 0) || (err == -ENOENT)) {
++			nf_ct_put(ct);
+ 			spin_unlock_bh(&nf_conntrack_expect_lock);
+ 			return err;
+ 		}

@@ -1,0 +1,11 @@
+SOURCE :This has been taken from barrier breaker packages 14.07 of revison 44441
+URL:https://dev.openwrt.org/browser/branches/packages_14.07/net/ntpclient?rev=44441
+SUPPORT : NTP client
+Changes:
+
+No Changes
+
+The Package Version is same as Attitude Adjustment
+AA Info
+SOURCE : ntpclient 2007_365 version package took from Openwrt Attitude Adjustment 12.09 packages base and SVN revision is 36089
+SOURCE PATH : https://dev.openwrt.org/browser/branches/packages_12.09/net/ntpclient?rev=36089

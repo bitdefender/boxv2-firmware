@@ -1,0 +1,10 @@
+--- zc/zclib.c  2002-11-26 04:51:21.000000000 +0100
++++ zc.arm/zclib.c      2007-03-27 11:26:12.000000000 +0200
+@@ -118,6 +118,7 @@
+ #define SYS_sched_setaffinity 241
+ #else
+ #warning please define SYS_sched_setaffinity
++#define SYS_sched_setaffinity 241
+ #endif
+ #endif
+     

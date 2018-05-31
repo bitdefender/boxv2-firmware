@@ -1,0 +1,45 @@
+SOURCE : samba4 4.00.0rc5 is updated on samba36 3.6.4 verison package. This samba 3.6.4 version package took from Openwrt Packages base and revision is 31246.
+SOURCE PATH : https://dev.openwrt.org/browser/packages/net/samba36?rev=31246
+SUPPORT : samba server
+CHANGES :
+1. Makefile 
+	- Updated the samba version from 3.6.4 to 4.0.0rc5.
+	- smb2 splice option support added.
+	- Enable support for new writev/readv implementation.
+	- Custom directory support added.
+	- Active development support added, for internal development usage.
+	- URL updated.
+2. Config.in 
+	- For samba smb splice support configuration.
+3. samba.config
+	- For GUI support updated the configuration format.
+4. samba.init
+	- Updated the samba init script to sync with GUI configuration.
+	- MDMA IRQ affinity changes.
+5. smb.conf.template
+	- Updated the configuration. root can not be invalid user. 
+	- Updated with socket and syslog options.
+6. www directory
+	- This GUI scripts directory.
+7. 100-configure_fixes.patch, 110-multicall.patch and 111-owrt_smbpasswd.patch
+	- Updated the patches with samba 4.0.0rc5 code base.
+8. 120-add_missing_ifdef.patch, 200-remove_printer_support.patch, 210-remove_ad_support.patch, 220-remove_services.patch, 230-remove_winreg_support.patch, 240-remove_dfs_api.patch, 250-remove_domain_logon.patch, 260-remove_samr.patch, 270-remove_registry_backend.patch, 280-strip_srvsvc.patch, 290-remove_lsa.patch, 300-assert_debug_level.patch, 310-remove_error_strings.patch, 320-debug_level_checks.patch and 330-librpc_default_print.patch
+	- Removed these patches.
+9. 400-FSL-lib_replace.patch 
+	- This is Mindspeed changes patch.
+10. Modified Makefile to modify the compilation option with-aio to without-aio. 
+
+
+
+CC changes:
+
+1)Makefile Modifications
+    - the Build directory name and git clone directory name
+    - package-version-overide support not there in CC. Hence commented the related 
+    - Commented the PKG_SOURCE_URL as it is not allowing to take the Git option
+2)Added the new patch 001-FSL-parsing-rules-changed.patch
+    -This patch is added due to the changes in parsing rules of gcc 4.8 and the patch is obtained from the link given below
+      -https://bugzilla.samba.org/show_bug.cgi?id=9636
+3)Removed all other patches in the patches directory as those changes were already present in the samba4 git repository 
+4)Added PACKAGE_SAMBA4_MAX_DEBUG_LEVEL and  PACKAGE_SAMBA4_SMB_SPLICE configuration directly in the makefile
+    

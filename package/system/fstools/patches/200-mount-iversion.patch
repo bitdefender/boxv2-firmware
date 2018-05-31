@@ -1,0 +1,11 @@
+--- a/mount_root.c	2017-09-14 13:20:28.095227732 +0300
++++ a/mount_root.c	2017-09-14 13:20:31.023224756 +0300
+@@ -69,7 +69,7 @@
+ 		root = volume_find("rootfs");
+ 		volume_init(root);
+ 		ULOG_NOTE("mounting /dev/root\n");
+-		mount("/dev/root", "/", NULL, MS_NOATIME | MS_REMOUNT, 0);
++		mount("/dev/root", "/", NULL, MS_NOATIME | MS_REMOUNT | MS_I_VERSION, 0);
+ 		if (get_cmdline_val("bdbox.bootstrap", buff, sizeof(buff))) {
+ 			ULOG_INFO("Mounting ramfs overlay");
+ 			return ramoverlay();

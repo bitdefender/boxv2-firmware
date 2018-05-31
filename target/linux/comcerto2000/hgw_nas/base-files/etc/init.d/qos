@@ -1,0 +1,103 @@
+#!/bin/sh /etc/rc.common
+# Copyright (C) 2006 OpenWrt.org
+
+START=19
+
+# Slow forward/output/input packets:
+# 8 priority levels: 0, 1, 2, 3, ... 7
+# Using the 8 lower queues, 0 - 7
+# default priority is the highest priority: 7
+
+# Fast forward/output packets:
+# 8 priority levels: 0, 1, 2, 3, ... 7
+# Using the 8 top queues, 8 - 15
+
+# Two levels of scheduling
+# Round-robin between pairs of queues with same priority
+# Strict priority between all pairs
+# priority 0 - rr queue 0, queue 8
+# priority 1 - rr queue 1, queue 9
+# priority 2 - rr queue 2, queue 10
+# priority 3 - rr queue 3, queue 11
+# priority 4 - rr queue 4, queue 12
+# priority 5 - rr queue 5, queue 13
+# priority 6 - rr queue 6, queue 14
+# priority 7 - rr queue 7, queue 15
+
+stop() {
+	iptables -t mangle -D OUTPUT -j qos_output	> /dev/null 2>&1
+	iptables -t mangle -D FORWARD -j qos_forward	> /dev/null 2>&1
+
+	ip6tables -t mangle -D OUTPUT -j qos_output	> /dev/null 2>&1
+	ip6tables -t mangle -D FORWARD -j qos_forward	> /dev/null 2>&1
+
+	iptables -t mangle -F qos_output	> /dev/null 2>&1
+	iptables -t mangle -F qos_forward	> /dev/null 2>&1
+
+	ip6tables -t mangle -F qos_output	> /dev/null 2>&1
+	ip6tables -t mangle -F qos_forward	> /dev/null 2>&1
+
+	iptables -t mangle -X qos_output	> /dev/null 2>&1
+	iptables -t mangle -X qos_forward	> /dev/null 2>&1
+
+	ip6tables -t mangle -X qos_output	> /dev/null 2>&1
+	ip6tables -t mangle -X qos_forward	> /dev/null 2>&1
+}
+
+rules_add()
+{
+	# Local TCP output must go into queue 0
+	iptables -t mangle -A qos_output -p tcp -o $1 -j CONNMARK --set-mark 0x0/0xf
+	ip6tables -t mangle -A qos_output -p tcp -o $1 -j CONNMARK --set-mark 0x0/0xf
+
+	# Fast forwarded traffic can't use queues 0 to 7
+	# The conntrack mark used on fast path comes from this setting
+	iptables -t mangle -A qos_forward -o $1 -j CONNMARK --set-mark 0x8/0xf
+	ip6tables -t mangle -A qos_forward -o $1 -j CONNMARK --set-mark 0x8/0xf
+}
+
+scheduler_cfg()
+{
+	[ ! -e /var/run/cmm.pid ] && return
+
+	cmm -c set qm interface $1 qos on
+
+	cmm -c set qm interface $1 scheduler 7 algorithm rr queue 7 queue 15
+	cmm -c set qm interface $1 scheduler 6 algorithm rr queue 6 queue 14
+	cmm -c set qm interface $1 scheduler 5 algorithm rr queue 5 queue 13
+	cmm -c set qm interface $1 scheduler 4 algorithm rr queue 4 queue 12
+	cmm -c set qm interface $1 scheduler 3 algorithm rr queue 3 queue 11
+	cmm -c set qm interface $1 scheduler 2 algorithm rr queue 2 queue 10
+	cmm -c set qm interface $1 scheduler 1 algorithm rr queue 1 queue 9
+	cmm -c set qm interface $1 scheduler 0 algorithm rr queue 0 queue 8
+}
+
+# called by cmm init script
+restart() {
+	config_load qos
+
+	config_foreach scheduler_cfg ifname
+}
+
+start() {
+	stop
+
+	iptables -t mangle -N qos_output
+	iptables -t mangle -N qos_forward
+
+	ip6tables -t mangle -N qos_output
+	ip6tables -t mangle -N qos_forward
+
+	config_load qos
+
+	config_foreach rules_add ifname
+
+	iptables -t mangle -A OUTPUT -j qos_output
+	iptables -t mangle -A FORWARD -j qos_forward
+
+	ip6tables -t mangle -A OUTPUT -j qos_output
+	ip6tables -t mangle -A FORWARD -j qos_forward
+
+	config_foreach scheduler_cfg ifname
+}
+

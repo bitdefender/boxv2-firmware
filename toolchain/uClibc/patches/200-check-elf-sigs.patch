@@ -1,0 +1,42 @@
+Index: uClibc-ng-1.0.22/ldso/include/dl-syscall.h
+===================================================================
+--- uClibc-ng-1.0.22.orig/ldso/include/dl-syscall.h
++++ uClibc-ng-1.0.22/ldso/include/dl-syscall.h
+@@ -180,6 +180,11 @@ _dl_pread(int fd, void *buf, size_t coun
+ }
+ #endif
+ 
++static __always_inline int _dl_ioctl(int fd, unsigned long cmd)
++{
++	return INLINE_SYSCALL(ioctl, 2, fd, cmd);
++}
++
+ #ifdef __UCLIBC_HAS_SSP__
+ # include <sys/time.h>
+ # define __NR__dl_gettimeofday __NR_gettimeofday
+Index: uClibc-ng-1.0.22/ldso/ldso/dl-elf.c
+===================================================================
+--- uClibc-ng-1.0.22.orig/ldso/ldso/dl-elf.c
++++ uClibc-ng-1.0.22/ldso/ldso/dl-elf.c
+@@ -527,6 +527,8 @@ struct elf_resolve *_dl_load_elf_shared_
+ 		return NULL;
+ 	}
+ 
++	(void)_dl_ioctl(infile, FIOVERIFY);
++
+ 	if (_dl_fstat(infile, &st) < 0) {
+ 		_dl_internal_error_number = LD_ERROR_NOFILE;
+ 		_dl_close(infile);
+Index: uClibc-ng-1.0.22/ldso/include/ldso.h
+===================================================================
+--- uClibc-ng-1.0.22.orig/ldso/include/ldso.h
++++ uClibc-ng-1.0.22/ldso/include/ldso.h
+@@ -163,6 +163,8 @@ extern void _dl_dprintf(int, const char
+ # endif
+ #endif
+ 
++#define FIOVERIFY 0x545F
++
+ #ifndef DL_GET_READY_TO_RUN_EXTRA_PARMS
+ # define DL_GET_READY_TO_RUN_EXTRA_PARMS
+ #endif

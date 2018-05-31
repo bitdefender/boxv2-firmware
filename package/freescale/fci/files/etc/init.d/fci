@@ -1,0 +1,27 @@
+#!/bin/sh /etc/rc.common
+# Copyright (C) 2006 OpenWrt.org
+
+START=53
+
+start() {
+        if [ -e /proc/fppmode ]; then
+	  if [ "`grep "0" /proc/fppmode`" ]; then
+            exit 0
+          fi
+        fi
+	insmod fci
+	sleep 1
+	echo done
+}
+
+stop(){
+        if [ -e /proc/fppmode ]; then
+	  if [ "`grep "0" /proc/fppmode`" ]; then
+            exit 0
+          fi
+        fi
+# Fast Path processing MUST BE DISABLED before removing the module, otherwise the CSP will loose all network connectivity
+	rmmod fci
+	sleep 1
+	echo done
+}

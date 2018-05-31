@@ -1,0 +1,6 @@
+SOURCE : sysstat 10.1.2 version package based on sysstat version 9.0.6. Sysstat 9.0.6 version package took from Openwrt Attitude Adjustment 12.09 packages base and SVN revision is 36089
+SOURCE PATH : https://dev.openwrt.org/browser/branches/packages_12.09/utils/sysstat/?rev=36089
+SUPPORT : Sysstat performance monitoring tools
+CHANGES :
+1. Makefile
+	- Sysstat version updated from 9.0.6 to 10.1.2 and checksum modified.

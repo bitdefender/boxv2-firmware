@@ -1,0 +1,38 @@
+#!/bin/sh /etc/rc.common
+# Copyright (C) 2006 OpenWrt.org
+
+START=51
+
+start() {
+	echo "Warning: For CSME Bridge setup, system must be booted without matisse/asterisk loaded"
+
+	#Load csm encaps bridge module
+        echo "Now starting csme bridge mode.."
+        insmod /lib/modules/2.6.21.1/csme_bridge.ko phy_interface=eth0 host_macaddress_string=00:10:a4:16:57:6a support_ip=no
+        echo 1 > /proc/sys/net/ipv4/conf/eth0/proxy_arp
+        ifconfig eth1 192.168.0.10 netmask 255.255.255.255 pointopoint 192.168.31.222 up 
+
+	#Restart fast path
+	/etc/init.d/matisse-no-ifup start
+	/etc/init.d/fpp start
+	/etc/init.d/fci start
+        /etc/init.d/cmm start
+	sleep 5
+        /etc/init.d/fpp_enable start
+	echo "done"
+}
+
+stop(){
+        /etc/init.d/fpp_enable stop
+	/etc/init.d/cmm stop
+	sleep 1
+        /etc/init.d/fci stop
+        /etc/init.d/fpp stop
+        sleep 5
+	/etc/init.d/matisse-no-ifup stop
+        echo "Now unloading csme bridge..."
+        rmmod /lib/modules/2.6.21.1/csme_bridge.ko
+        echo "done"
+        ifconfig eth1 down
+}
+

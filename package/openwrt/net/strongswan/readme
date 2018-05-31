@@ -1,0 +1,6 @@
+SOURCE : strongswan 5.0.4 version based on strongswan5 5.0.4 version package. Strongswan5 5.0.4 version package took from Openwrt packages base and revision is 36649.(It is not updated to the Attitude Adjustment 12.09 packages branch)
+SOURCE PATH : https://dev.openwrt.org/browser/packages/net/strongswan/Makefile?rev=36649
+SUPPORT : strongswan
+CHANGES :
+1. Makefile 
+	- Strongswan4 package version upgraded from 4.6.4 to 5.0.4.

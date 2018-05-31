@@ -1,0 +1,15 @@
+Index: mtd-utils-1.5.1/mkfs.ubifs/compr.c
+===================================================================
+--- mtd-utils-1.5.1.orig/mkfs.ubifs/compr.c
++++ mtd-utils-1.5.1/mkfs.ubifs/compr.c
+@@ -86,6 +86,10 @@ static int zlib_deflate(void *in_buf, si
+ #ifndef WITHOUT_LZO
+ #include <lzo/lzo1x.h>
+ 
++#undef lzo_init
++#undef lzo_fini
++#undef lzo_compress
++
+ static void *lzo_mem;
+ 
+ static int lzo_init(void)

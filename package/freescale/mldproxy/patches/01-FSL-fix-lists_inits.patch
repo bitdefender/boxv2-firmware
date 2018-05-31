@@ -1,0 +1,169 @@
+diff -u Gateway/MLD_forward.c Gateway.new/MLD_forward.c
+--- Gateway/MLD_forward.c	2004-10-11 11:26:11.000000000 +0200
++++ Gateway.new/MLD_forward.c	2007-04-05 19:57:54.000000000 +0200
+@@ -100,6 +100,7 @@
+ 	time(&now);
+ 	new->time_out = now+entry_validity;
+ 	new->nb_fwded = 0;
++	new->next = NULL;
+ 
+ 	if( (*ifaces) != NULL)				/* if list not empty */
+ 		while(tmp_iface->next != NULL)	/* go to the end of the list */
+@@ -113,7 +114,6 @@
+ 	{
+ 		tmp_iface->next = new;
+ 		new->previous = tmp_iface;
+-		new->next = NULL;
+ 	}
+ 
+ 	if(debug_lvl == VERBOSE)
+@@ -420,6 +420,7 @@
+ 	time(&now);
+ 	new->time_out = now+entry_validity;
+ 	new->nb_fwded = 0;
++	new->next = NULL;
+ 
+ 	if( (*ifaces) != NULL)				/* if list not empty */
+ 		while(tmp_iface->next != NULL)	/* go to the end of the list */
+@@ -433,7 +434,6 @@
+ 	{
+ 		tmp_iface->next = new;
+ 		new->previous = tmp_iface;
+-		new->next = NULL;
+ 	}
+ 
+ 	if(debug_lvl == VERBOSE)
+@@ -945,6 +945,7 @@
+ 		return FALSE;
+ 	}
+ 	new->src_addr = source;
++	new->next = NULL;
+ 	
+ 	if( (*sources) != NULL)				/* if list not empty */
+ 		while(tmp_sources->next != NULL)	/* go to the end of the list */
+@@ -956,7 +957,6 @@
+ 	{
+ 		tmp_sources->next = new;
+ 		new->previous = tmp_sources;
+-		new->next = NULL;
+ 	}
+ 
+ 	if(debug_lvl == VERBOSE)
+@@ -1337,6 +1337,7 @@
+ 	new->mode = MC_ASM;
+ 	new->src_addr = in6addr_any;
+ 	new->interfaces = NULL;
++	new->next = NULL;
+ 
+ 	if(*list != NULL)				/* if list not empty */
+ 		while(tmp->next != NULL)	/* go to the end of the list */
+@@ -1350,7 +1351,6 @@
+ 	{
+ 		tmp->next = new;
+ 		new->previous = tmp;
+-		new->next = NULL;
+ 	}
+ 
+ 	if(debug_lvl == VERBOSE)
+@@ -1552,6 +1552,7 @@
+ 	new->mode = MC_SSM;
+ 	new->src_addr = source;
+ 	new->interfaces = NULL;
++	new->next = NULL;
+ 
+ 	if(*list != NULL)				/* if list not empty */
+ 		while(tmp->next != NULL)	/* go to the end of the list */
+@@ -1565,7 +1566,6 @@
+ 	{
+ 		tmp->next = new;
+ 		new->previous = tmp;
+-		new->next = NULL;
+ 	}
+ 
+ 	if(debug_lvl == VERBOSE)
+diff -u Gateway/MLD_membership.c Gateway.new/MLD_membership.c
+--- Gateway/MLD_membership.c	2004-10-11 11:26:11.000000000 +0200
++++ Gateway.new/MLD_membership.c	2007-04-05 19:53:42.000000000 +0200
+@@ -87,6 +87,7 @@
+ 		new->scope = MC_SITE;
+ 	new->mode = MC_ASM;
+ 	new->source_addr = in6addr_any;
++	new->next = NULL;
+ 
+ 	if(list->joined_groups != NULL)				/* if list not empty */
+ 		while(tmp->next != NULL)	/* go to the end of the list */
+@@ -100,7 +101,6 @@
+ 	{
+ 		tmp->next = new;
+ 		new->previous = tmp;
+-		new->next = NULL;
+ 	}
+ 
+ 	if(debug_lvl == VERBOSE)
+@@ -139,6 +139,7 @@
+ 		new->scope = MC_SITE;
+ 	new->mode = MC_ASM;
+ 	new->source_addr = in6addr_any;
++	new->next = NULL;
+ 
+ 	if(list->joined_groups != NULL)				/* if list not empty */
+ 		while(tmp->next != NULL)	/* go to the end of the list */
+@@ -152,7 +153,6 @@
+ 	{
+ 		tmp->next = new;
+ 		new->previous = tmp;
+-		new->next = NULL;
+ 	}
+ 
+ 	if(debug_lvl == VERBOSE)
+@@ -202,6 +202,7 @@
+ 	else if(IN6_IS_ADDR_MC_SITELOCAL(grp_addr.s6_addr))
+ 		new->scope = MC_SITE;
+ 	new->mode = MC_SSM;
++	new->next = NULL;
+ 
+ 	if(list->joined_groups != NULL)				/* if list not empty */
+ 		while(tmp->next != NULL)	/* go to the end of the list */
+@@ -215,7 +216,6 @@
+ 	{
+ 		tmp->next = new;
+ 		new->previous = tmp;
+-		new->next = NULL;
+ 	}
+ 
+ 	if(debug_lvl == VERBOSE)
+@@ -255,6 +255,7 @@
+ 	else if(IN6_IS_ADDR_MC_SITELOCAL(group_addr.s6_addr))
+ 		new->scope = MC_SITE;
+ 	new->mode = MC_SSM;
++	new->next = NULL;
+ 
+ 	if(list->joined_groups != NULL)				/* if list not empty */
+ 		while(tmp->next != NULL)	/* go to the end of the list */
+@@ -268,7 +269,6 @@
+ 	{
+ 		tmp->next = new;
+ 		new->previous = tmp;
+-		new->next = NULL;
+ 	}
+ 
+ 	if(debug_lvl == VERBOSE)
+diff -u Gateway/MLD_MN.c Gateway.new/MLD_MN.c
+--- Gateway/MLD_MN.c	2004-10-11 11:26:11.000000000 +0200
++++ Gateway.new/MLD_MN.c	2007-04-05 18:26:02.000000000 +0200
+@@ -145,6 +145,7 @@
+ 	new->home_addr = in6addr_any;
+ 	new->nb_fwded = 0;
+ 	new->nb_sent = 0;
++	new->next = NULL;
+ 
+ 	if(*list != NULL)			/* if list not empty */
+ 		while(tmp->next != NULL)	/* go to the end of the list */
+@@ -156,7 +157,6 @@
+ 	{
+ 		tmp->next = new;
+ 		new->previous = tmp;
+-		new->next = NULL;
+ 	}
+ 
+ 	if(debug_lvl == VERBOSE)

@@ -1,0 +1,57 @@
+menu "ProSLIC module options"
+	depends on PACKAGE_kmod-proslic
+
+	choice 
+		prompt "Select chipset/BOM option to use"
+		default SI3227_FB
+		help
+			Select which chipset/BOM option to build for.  If unsure, please contact your hardware supplier.
+
+		config SI3227_FB
+			bool "SI3227 Flyback"
+
+		config SI3215
+			bool "SI3215"
+
+		config SI3217X_FB
+			bool "SI3217X Flyback"
+
+		config SI3217X_PBB
+			bool "SI3217X PMOS-BuckBoost"
+
+		config SI3226X_FB
+			bool "SI3226X Flyback"
+
+		config SI3226X_TSS
+			bool "SI3226X TSS"
+
+		config SI3226X_TSS_ISO
+			bool "SI3226X TSS ISO"
+        
+	        config SI3226X_PBB
+        		bool "SI3226X PMOS-BuckBoost"
+
+        	config SI3226X_PBB_JPN
+        		bool "SI3226X PMOS-BuckBoost - Japan"
+
+	endchoice
+
+	config SILABS_DEBUG
+		bool "Enable debugging"
+		default n
+        help
+            Select this option if you wish to have additional debug messages included in the build.
+
+	config SILABS_PROC_DEBUG
+		bool "Enable proc entry debugging"
+		default n
+        help
+            Select this option if you wish to have peek/poke cabilities.  Not supported by all chipsets.
+
+    config SILABS_SPITEST
+        bool "Enable in the proc entry a SPI test routine"
+        default n
+        help
+            Select thsi option if you wish to have a pattern test generator sending data to/from the ProSLIC chipset.  NOT recommended with
+            production setups. Not supported by all chipsets.
+endmenu

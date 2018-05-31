@@ -1,0 +1,21 @@
+#!/bin/sh /etc/rc.common
+
+USE_PROCD=1
+START=99
+STOP=80
+SVC="haproxy"
+
+HAPROXY_BIN="/usr/sbin/haproxy"
+HAPROXY_CONFIG="/etc/haproxy.cfg"
+HAPROXY_PID="/var/run/haproxy.pid"
+
+start_service() {
+    procd_open_instance $SVC
+    procd_set_param command $HAPROXY_BIN -db -q -f "${HAPROXY_CONFIG}" -p "${HAPROXY_PID}"
+    procd_set_param respawn ${respawn_threshold:-3600} ${respawn_timeout:-5} ${respawn_retry:-5}
+    procd_close_instance
+}
+
+stop_service() {
+    procd_kill $SVC $SVC
+}

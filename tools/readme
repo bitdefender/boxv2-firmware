@@ -1,0 +1,3 @@
+CHANGES:
+1. Makefile (tools/quilt/Makefile)
+	-Fix for bash binary big path.

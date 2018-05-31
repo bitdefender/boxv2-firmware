@@ -1,0 +1,70 @@
+diff -Naur iproute2-4.0.0_1/ip/ip6tunnel.c iproute2-4.0.0_1_mod/ip/ip6tunnel.c
+--- iproute2-4.0.0_1/ip/ip6tunnel.c	2015-11-02 11:41:53.440079000 +0530
++++ iproute2-4.0.0_1_mod/ip/ip6tunnel.c	2015-11-03 16:19:07.169043000 +0530
+@@ -42,6 +42,7 @@
+ 
+ #define DEFAULT_TNL_HOP_LIMIT	(64)
+ 
++
+ static void usage(void) __attribute__((noreturn));
+ 
+ static void usage(void)
+@@ -148,6 +149,11 @@
+ 				 strcmp(*argv, "ipip6") == 0 ||
+ 				 strcmp(*argv, "ip4ip6") == 0)
+ 				p->proto = IPPROTO_IPIP;
++			else if (strcmp(*argv, "etherip/ipv6") == 0 ||
++				strcmp(*argv, "ethip/ipv6") == 0 ||
++				strcmp(*argv, "ethipip6") == 0 ||
++				strcmp(*argv, "etheripip6") == 0)
++				p->proto = IPPROTO_ETHERIP;
+ 			else if (strcmp(*argv, "ip6gre") == 0 ||
+ 				 strcmp(*argv, "gre/ipv6") == 0)
+ 				p->proto = IPPROTO_GRE;
+@@ -460,7 +466,9 @@
+ 	if (parse_args(argc, argv, cmd, &p) < 0)
+ 		return -1;
+ 
+-	if (p.proto == IPPROTO_GRE)
++	if(p.proto == IPPROTO_ETHERIP)
++		basedev = "ethipip6tnl0";
++	else if (p.proto == IPPROTO_GRE)
+ 		basedev = "ip6gre0";
+ 	else if (p.i_flags & VTI_ISVTI)
+ 		basedev = "ip6_vti0";
+@@ -478,7 +486,9 @@
+ 	if (parse_args(argc, argv, SIOCDELTUNNEL, &p) < 0)
+ 		return -1;
+ 
+-	if (p.proto == IPPROTO_GRE)
++	if(p.proto == IPPROTO_ETHERIP)
++		basedev = "ethipip6tnl0";
++	else if (p.proto == IPPROTO_GRE)
+ 		basedev = "ip6gre0";
+ 	else if (p.i_flags & VTI_ISVTI)
+ 		basedev = "ip6_vti0";
+diff -Naur iproute2-4.0.0_1/ip/tunnel.c iproute2-4.0.0_1_mod/ip/tunnel.c
+--- iproute2-4.0.0_1/ip/tunnel.c	2015-11-02 11:41:53.531102000 +0530
++++ iproute2-4.0.0_1_mod/ip/tunnel.c	2015-11-02 12:31:06.756730000 +0530
+@@ -48,6 +48,9 @@
+ 	case IPPROTO_GRE:
+ 		strcpy(buf, "gre");
+ 		break;
++	case IPPROTO_ETHERIP:
++		strcpy(buf, "etherip");
++		break;
+ 	case IPPROTO_IPV6:
+ 		strcpy(buf, "ipv6");
+ 		break;
+diff -Naur iproute2-4.0.0_1/ip/tunnel.h iproute2-4.0.0_1_mod/ip/tunnel.h
+--- iproute2-4.0.0_1/ip/tunnel.h	2015-11-02 11:41:53.533086000 +0530
++++ iproute2-4.0.0_1_mod/ip/tunnel.h	2015-11-03 16:18:59.561650000 +0530
+@@ -23,6 +23,8 @@
+ 
+ #include <linux/types.h>
+ 
++#define IPPROTO_ETHERIP 97
++
+ const char *tnl_strproto(__u8 proto);
+ 
+ int tnl_get_ioctl(const char *basedev, void *p);

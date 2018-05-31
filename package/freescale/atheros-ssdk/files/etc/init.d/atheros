@@ -1,0 +1,14 @@
+#!/bin/sh /etc/rc.common
+
+START=40
+start() {
+	insmod athrs_ar8327_drv
+	sleep 1
+	echo done
+}
+
+stop() {
+	rmmod athrs_ar8327_drv
+	sleep 1
+	echo done
+}

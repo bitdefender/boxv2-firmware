@@ -1,0 +1,164 @@
+Index: uClibc-ng/include/sys/socket.h
+===================================================================
+--- uClibc-ng.orig/include/sys/socket.h
++++ uClibc-ng/include/sys/socket.h
+@@ -98,6 +98,13 @@ typedef union { __SOCKADDR_ALLTYPES
+ #endif
+ 
+ 
++struct mmsghdr
++{
++    struct msghdr msg_hdr;  /* Actual message header.  */
++    unsigned int msg_len;   /* Number of received or sent bytes for the
++                                entry.  */
++};
++
+ /* Create a new socket of type TYPE in domain DOMAIN, using
+    protocol PROTOCOL.  If PROTOCOL is zero, one is chosen automatically.
+    Returns a file descriptor for the new socket, or -1 for errors.  */
+@@ -190,6 +197,9 @@ extern ssize_t sendmsg (int __fd, const
+ 			int __flags);
+ libc_hidden_proto(sendmsg)
+ 
++ extern int sendmmsg (int __fd, struct mmsghdr *__vmessages,
++                unsigned int __vlen, int __flags);
++libc_hidden_proto(sendmmsg)
+ /* Receive a message as described by MESSAGE from socket FD.
+    Returns the number of bytes read or -1 for errors.
+ 
+@@ -198,7 +208,10 @@ libc_hidden_proto(sendmsg)
+ extern ssize_t recvmsg (int __fd, struct msghdr *__message, int __flags);
+ libc_hidden_proto(recvmsg)
+ 
+-
++extern int recvmmsg (int __fd, struct mmsghdr *__vmessages,
++                unsigned int __vlen, int __flags,
++                const struct timespec *__tmo);
++libc_hidden_proto(recvmmsg)
+ /* Put the current value for socket FD's option OPTNAME at protocol level LEVEL
+    into OPTVAL (which is *OPTLEN bytes long), and set *OPTLEN to the value's
+    actual length.  Returns 0 on success, -1 for errors.  */
+Index: uClibc-ng/libc/inet/Makefile.in
+===================================================================
+--- uClibc-ng.orig/libc/inet/Makefile.in
++++ uClibc-ng/libc/inet/Makefile.in
+@@ -49,7 +49,7 @@ CSRC-$(UCLIBC_HAS_RESOLVER_SUPPORT) += \
+ socketcalls_CSRC-y += \
+ 	accept.c bind.c connect.c getpeername.c getsockname.c \
+ 	getsockopt.c listen.c recv.c recvfrom.c recvmsg.c send.c sendmsg.c \
+-	sendto.c setsockopt.c shutdown.c socket.c socketpair.c
++	sendto.c setsockopt.c shutdown.c socket.c socketpair.c sendmmsg.c recvmmsg.c
+ socketcalls_CSRC-$(UCLIBC_LINUX_SPECIFIC) += accept4.c
+ CSRC-$(UCLIBC_HAS_SOCKET) += $(socketcalls_CSRC-y) opensock.c
+ 
+Index: uClibc-ng/libc/inet/recvmmsg.c
+===================================================================
+--- /dev/null
++++ uClibc-ng/libc/inet/recvmmsg.c
+@@ -0,0 +1,3 @@
++#define L_recvmmsg
++#include "socketcalls.c"
++
+Index: uClibc-ng/libc/inet/sendmmsg.c
+===================================================================
+--- /dev/null
++++ uClibc-ng/libc/inet/sendmmsg.c
+@@ -0,0 +1,2 @@
++#define L_sendmmsg
++#include "socketcalls.c"
+Index: uClibc-ng/libc/inet/socketcalls.c
+===================================================================
+--- uClibc-ng.orig/libc/inet/socketcalls.c
++++ uClibc-ng/libc/inet/socketcalls.c
+@@ -29,6 +29,8 @@
+ #define SYS_SENDMSG     16
+ #define SYS_RECVMSG     17
+ #define SYS_ACCEPT4     18
++#define SYS_RECVMMSG    19
++#define SYS_SENDMMSG    20
+ #endif
+ 
+ /* exposed on x86 since Linux commit 9dea5dc921b5f4045a18c63eb92e84dc274d17eb */
+@@ -51,6 +53,8 @@
+ #undef __NR_shutdown
+ #undef __NR_socket
+ #undef __NR_socketpair
++#undef __NR_sendmmsg
++#undef __NR_recvmmsg
+ #endif
+ 
+ #ifdef L_accept
+@@ -415,3 +419,47 @@ int socketpair(int family, int type, int
+ # endif
+ }
+ #endif
++
++#ifdef L_recvmmsg
++static int __NC(recvmmsg)(int fd, struct mmsghdr *vmessages, unsigned int vlen, int flags,
++               const struct timespec *tmo)
++{
++# ifdef __NR_recvmmsg
++	return (int)INLINE_SYSCALL(recvmmsg, 5, fd, vmessages, vlen, flags, tmo);
++# else
++	unsigned long args[5];
++
++	args[0] = fd;
++	args[1] = (unsigned long)vmessages;
++	args[2] = vlen;
++	args[3] = flags;
++	args[4] = (unsigned long)tmo;
++	return (ssize_t)__socketcall(SYS_RECVMMSG, args);
++# endif
++}
++CANCELLABLE_SYSCALL(int, recvmmsg, (int fd, struct mmsghdr *vmessages, unsigned int vlen, int flags,
++                            const struct timespec *tmo),
++		    (fd, vmessages, vlen, flags, tmo))
++lt_libc_hidden(recvmmsg)
++#endif
++
++#ifdef L_sendmmsg
++static int __NC(sendmmsg)(int fd, struct mmsghdr *vmessages, unsigned int vlen, int flags)
++{
++# ifdef __NR_sendmmsg
++	return (int)INLINE_SYSCALL(sendmmsg, 4, fd, vmessages, vlen, flags);
++# else
++	unsigned long args[4];
++
++	args[0] = fd;
++	args[1] = (unsigned long) vmessages;
++	args[2] = vlen;
++	args[3] = flags;
++	return (int)__socketcall(SYS_SENDMMSG, args);
++# endif
++}
++CANCELLABLE_SYSCALL(int, sendmmsg, (int fd, struct mmsghdr *vmessages, unsigned int vlen, int flags),
++		    (fd, vmessages, vlen, flags))
++lt_libc_hidden(sendmmsg)
++#endif
++
+Index: uClibc-ng/libc/sysdeps/linux/common/stubs.c
+===================================================================
+--- uClibc-ng.orig/libc/sysdeps/linux/common/stubs.c
++++ uClibc-ng/libc/sysdeps/linux/common/stubs.c
+@@ -279,6 +279,10 @@ make_stub(recvfrom)
+ make_stub(recvmsg)
+ #endif
+ 
++#if !defined __NR_recvmmsg && !defined __NR_socketcall && defined __UCLIBC_HAS_SOCKET__
++make_stub(recvmmsg)
++#endif
++
+ #if !defined __NR_remap_file_pages && defined __UCLIBC_LINUX_SPECIFIC__
+ make_stub(remap_file_pages)
+ #endif
+@@ -320,6 +324,10 @@ make_stub(sendfile64)
+ make_stub(sendmsg)
+ #endif
+ 
++#if !defined __NR_sendmmsg && !defined __NR_socketcall && defined __UCLIBC_HAS_SOCKET__
++make_stub(sendmmsg)
++#endif
++
+ #if !defined __NR_sendto && !defined __NR_socketcall && defined __UCLIBC_HAS_SOCKET__
+ make_stub(sendto)
+ #endif

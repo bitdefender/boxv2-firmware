@@ -1,0 +1,8 @@
+CHANGES:
+1. netfilter.mk
+	- Avoiding the below modules to copy if the kernel version is 3.2. Because these modules does not present in 3.2 kernel.
+          nf_reject_ipv4, nf_reject_ipv6, nf_nat and nf_nat_ftp.
+2. image.mk
+	- Added ITB function support.
+
+       

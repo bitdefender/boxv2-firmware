@@ -1,0 +1,7 @@
+CHANGES : 
+1. Patches directory : All the patches in patches directory are freescale specific.
+   01-FSL-ips_status_definitions.patch : Account for additional IPS status bits. This patch is prepared for 3.2 and 3.19 kernels in patches-3.2 and patches-3.19 directories.
+   02-FSL-socket_buffer_size.patch : Set socket buffer size.
+   04-FSL-comcerto_fp_info.patch : Account for additional CTA attributes
+   05-FSL-build-id.patch : Adds ID attribute for user to kernel queries
+

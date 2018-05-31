@@ -1,0 +1,34 @@
+diff --git a/pidl/idl.yp b/pidl/idl.yp
+index b5c5185..c8a65f6 100644
+--- a/pidl/idl.yp
++++ b/pidl/idl.yp
+@@ -610,7 +610,9 @@ again:
+ 
+ 	for ($parser->YYData->{INPUT}) {
+ 		if (/^\#/) {
+-			if (s/^\# (\d+) \"(.*?)\"( \d+|)//) {
++			# Linemarker format is described at
++			# http://gcc.gnu.org/onlinedocs/cpp/Preprocessor-Output.html
++			if (s/^\# (\d+) \"(.*?)\"(( \d+){1,4}|)//) {
+ 				$parser->YYData->{LINE} = $1-1;
+ 				$parser->YYData->{FILE} = $2;
+ 				goto again;
+diff --git a/pidl/lib/Parse/Pidl/IDL.pm b/pidl/lib/Parse/Pidl/IDL.pm
+index d4820ff..6927c89 100644
+--- a/pidl/lib/Parse/Pidl/IDL.pm
++++ b/pidl/lib/Parse/Pidl/IDL.pm
+@@ -2576,7 +2576,9 @@ again:
+ 
+ 	for ($parser->YYData->{INPUT}) {
+ 		if (/^\#/) {
+-			if (s/^\# (\d+) \"(.*?)\"( \d+|)//) {
++			# Linemarker format is described at
++			# http://gcc.gnu.org/onlinedocs/cpp/Preprocessor-Output.html
++			if (s/^\# (\d+) \"(.*?)\"(( \d+){1,4}|)//) {
+ 				$parser->YYData->{LINE} = $1-1;
+ 				$parser->YYData->{FILE} = $2;
+ 				goto again;
+-- 
+1.8.1.1
+
+

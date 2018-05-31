@@ -1,0 +1,12 @@
+Index: iperf-2.0.5/include/headers.h
+===================================================================
+--- iperf-2.0.5.orig/include/headers.h	2016-11-11 07:17:37.380604104 +0200
++++ iperf-2.0.5/include/headers.h	2016-11-11 07:17:47.848653521 +0200
+@@ -82,7 +82,6 @@
+ #include <errno.h>
+ #include <string.h>
+ #include <time.h>
+-#include <math.h>
+ 
+ #ifdef WIN32
+ 

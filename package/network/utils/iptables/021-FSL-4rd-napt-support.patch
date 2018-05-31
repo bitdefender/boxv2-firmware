@@ -1,0 +1,77 @@
+diff -Naur iptables-1.4.21/extensions/libipt_MASQUERADE.c iptables-1.4.21-mod/extensions/libipt_MASQUERADE.c
+--- iptables-1.4.21/extensions/libipt_MASQUERADE.c	2013-11-22 16:48:13.000000000 +0530
++++ iptables-1.4.21-mod/extensions/libipt_MASQUERADE.c	2015-02-23 12:26:37.735766918 +0530
+@@ -11,6 +11,7 @@
+ enum {
+ 	O_TO_PORTS = 0,
+ 	O_RANDOM,
++  O_4RD_NAPT,
+ };
+ 
+ static void MASQUERADE_help(void)
+@@ -20,12 +21,16 @@
+ " --to-ports <port>[-<port>]\n"
+ "				Port (range) to map to.\n"
+ " --random\n"
+-"				Randomize source port.\n");
++"				Randomize source port."
++"--4rd-napt\n"
++"       4rd napt.\n");
++/* 4rd  C end */
+ }
+ 
+ static const struct xt_option_entry MASQUERADE_opts[] = {
+ 	{.name = "to-ports", .id = O_TO_PORTS, .type = XTTYPE_STRING},
+-	{.name = "random", .id = O_RANDOM, .type = XTTYPE_NONE},
++	{.name = "random", .id = O_RANDOM, .type = XTTYPE_NONE},
++  {.name = "4rd-napt",.id=O_4RD_NAPT,.type = XTTYPE_NONE}, 
+ 	XTOPT_TABLEEND,
+ };
+ 
+@@ -97,6 +102,11 @@
+ 	case O_RANDOM:
+ 		mr->range[0].flags |=  NF_NAT_RANGE_PROTO_RANDOM;
+ 		break;
++/* 4rd I start */
++  case O_4RD_NAPT:
++    mr->range[0].flags |=  NF_NAT_RANGE_4RD_NAPT;
++    break;
++ /* 4rd I end */
+ 	}
+ }
+ 
+@@ -116,6 +126,11 @@
+ 
+ 	if (r->flags & NF_NAT_RANGE_PROTO_RANDOM)
+ 		printf(" random");
++
++  /* 4rd I start */
++  if (r->flags & NF_NAT_RANGE_4RD_NAPT)
++    printf("4rd ");
++   /* 4rd I end */
+ }
+ 
+ static void
+@@ -132,6 +147,11 @@
+ 
+ 	if (r->flags & NF_NAT_RANGE_PROTO_RANDOM)
+ 		printf(" --random");
++  
++ /* 4rd I start */
++  if (r->flags & NF_NAT_RANGE_4RD_NAPT)
++    printf("--4rd-napt ");
++  /* 4rd I end */
+ }
+ 
+ static struct xtables_target masquerade_tg_reg = {
+diff -Naur iptables-1.4.21/include/linux/netfilter/nf_nat.h iptables-1.4.21-mod/include/linux/netfilter/nf_nat.h
+--- iptables-1.4.21/include/linux/netfilter/nf_nat.h	2013-11-22 16:48:13.000000000 +0530
++++ iptables-1.4.21-mod/include/linux/netfilter/nf_nat.h	2015-02-23 12:27:55.575768410 +0530
+@@ -8,6 +8,7 @@
+ #define NF_NAT_RANGE_PROTO_SPECIFIED	2
+ #define NF_NAT_RANGE_PROTO_RANDOM	4
+ #define NF_NAT_RANGE_PERSISTENT		8
++#define NF_NAT_RANGE_4RD_NAPT 16
+ 
+ struct nf_nat_ipv4_range {
+ 	unsigned int			flags;

@@ -1,0 +1,45 @@
+diff -pruN vapi-2.14.0_old/VAPI/common/vapi/announcement_fsm.c vapi-2.14.0/VAPI/common/vapi/announcement_fsm.c
+--- vapi-2.14.0_old/VAPI/common/vapi/announcement_fsm.c	2012-02-16 15:21:05.000000000 +0200
++++ vapi-2.14.0/VAPI/common/vapi/announcement_fsm.c	2012-02-16 15:41:38.000000000 +0200
+@@ -403,20 +403,6 @@ VSTATUS VFSM_PlayDataTransfer(IN SChnl *
+ 	if (Event == FSM_EVENT_PLAY_REC_STOP || Event == FSM_EVENT_REC_PLAY_TERMINATOR)
+ 			pstHostSpeechData->uiProceedToStop = True;	
+ 
+-	pstHostSpeechData->usStartOffset = 0;
+-	pstHostSpeechData->iFileDisc = -1;
+-
+-	/*check wav content*/
+-	if (pstHostSpeechData->uiHostSpeechDataFormat == eWavFormat) 
+-	{
+-		Status = VCORE_CheckWav(pstHostSpeechData);
+-		if (Status != SUCCESS)
+-		{
+-			Status = VAPI_ERR_UNDEFINED;
+-			goto finish;
+-		}
+-	}
+-
+ 	/* played data doesn't contain headers for each frame */
+ 	if (pstHostSpeechData->uiHostSpeechDataFormat != eHedFormat)
+ 	{
+@@ -481,6 +467,20 @@ VSTATUS VFSM_PlayDataTransfer(IN SChnl *
+ 	switch (pstVapiReq->usReqState)
+ 	{
+ 	case PLAY_DATA_TRANSFER_INIT:
++		pstHostSpeechData->usStartOffset = 0;
++		pstHostSpeechData->iFileDisc = -1;
++
++		/*check wav content*/
++		if (pstHostSpeechData->uiHostSpeechDataFormat == eWavFormat) 
++		{
++			Status = VCORE_CheckWav(pstHostSpeechData);
++			if (Status != SUCCESS)
++			{
++				Status = VAPI_ERR_UNDEFINED;
++				goto finish;
++			}
++		}
++
+ 		if (pstHostSpeechData->uiTimeOut != 0)
+ 		{
+ 			/* start timer with defined playback time*/

@@ -1,0 +1,12 @@
+diff -Naur haserl-0.9.32/src/haserl.c haserl-0.9.32-Modified/src/haserl.c
+--- haserl-0.9.32/src/haserl.c	2015-05-19 14:23:55.045704583 +0530
++++ haserl-0.9.32-Modified/src/haserl.c	2015-05-19 14:25:19.909700927 +0530
+@@ -80,7 +80,7 @@
+ #endif
+ 
+ #ifndef MAX_UPLOAD_KB
+-#define MAX_UPLOAD_KB 2048
++#define MAX_UPLOAD_KB 40960 /* To support 40M, for UBI nand image and future purpose */
+ #endif
+ 
+ /* Refuse to disable the subshell */

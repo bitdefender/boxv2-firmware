@@ -1,0 +1,20 @@
+# Don't Fast Forward FTP traffic
+config fastforward ftp
+	option proto		tcp
+	option port		21
+config fastforward sip
+        option proto            udp
+        option port             5060
+config fastforward pptp
+        option proto            tcp
+        option port             1723
+
+config fastforward box
+        option mark             '2 mask 15'
+
+#config logging
+#	option file	/var/log/cmm.log
+#	option command	0
+#	option error	1
+#       option warning	1
+#	option info	1

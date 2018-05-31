@@ -1,0 +1,727 @@
+diff --git a/Makefile b/Makefile
+index a71a069..f4a4289 100644
+--- a/Makefile
++++ b/Makefile
+@@ -446,6 +446,7 @@ $(obj)u-boot.bin:	$(obj)u-boot
+ 		$(BOARD_SIZE_CHECK)
+ 
+ $(obj)u-boot_secureboot:
++		$(shell cp u-boot.bin u-boot-nonsecureboot.bin;)
+ 		$(shell cp u-boot.bin ./tools/ImageGenarator/.; cd $(SRCTREE)/tools/ImageGenarator/; \
+ 		 chmod 755 *.sh; ./uboot_gen.sh 1>/dev/null;)
+ 
+diff --git a/PREVEDI-BOXV2.sh b/PREVEDI-BOXV2.sh
+new file mode 100755
+index 0000000..2249110
+--- /dev/null
++++ b/PREVEDI-BOXV2.sh
+@@ -0,0 +1,12 @@
++export CROSS_COMPILE=/home/matevy/sw/ls1024a/ask6_0_0/CR_RSR/CR/src-openwrt-ls1024_6.0.0/staging_dir/toolchain-arm_cortex-a9_gcc-4.8-linaro_glibc-2.19_eabi/bin/arm-openwrt-linux-
++export STAGING_DIR=/home/matevy/sw/ls1024a/ask6_0_0/CR_RSR/CR/src-openwrt-ls1024_6.0.0/staging_dir
++
++export ARCH=arm
++make boxv2_config
++make
++
++# ucomment this to generate u-boot.bin without fancy Comcerto header to boot it normally
++#rm u-boot.bin
++#/home/matevy/sw/ls1024a/ask6_0_0/CR_RSR/CR/src-openwrt-ls1024_6.0.0/staging_dir/toolchain-arm_cortex-a9_gcc-4.8-linaro_glibc-2.19_eabi/bin/arm-openwrt-linux-objcopy u-boot u-boot.bin -O binary
++
++
+diff --git a/arch/arm/include/asm/arch-comcerto/gpio.h b/arch/arm/include/asm/arch-comcerto/gpio.h
+index 0abac48..e7e175c 100644
+--- a/arch/arm/include/asm/arch-comcerto/gpio.h
++++ b/arch/arm/include/asm/arch-comcerto/gpio.h
+@@ -47,6 +47,10 @@
+ #define COMCERTO_GPIO_PAD_CONFIG5                       (COMCERTO_APB_GPIO_BASE + 0x114)
+ #define COMCERTO_GPIO_MEM_EMA_CONFIG0                       (COMCERTO_APB_GPIO_BASE + 0x1A0)
+ #define COMCERTO_GPIO_MEM_EMA_CONFIG1                       (COMCERTO_APB_GPIO_BASE + 0x1A4)
++#define COMCERTO_GPIO_EXT_OUTPUT_REG                    (COMCERTO_APB_GPIO_BASE + 0xD0)
++#define COMCERTO_GPIO_EXT_OE_REG                        (COMCERTO_APB_GPIO_BASE + 0xD4)
++#define COMCERTO_GPIO_EXT_INPUT_REG                     (COMCERTO_APB_GPIO_BASE + 0xD8)
++#define COMCERTO_GPIO_EXT_PIN_SELECT_REG                (COMCERTO_APB_GPIO_BASE + 0xDC)
+ 
+ #define GPIO_0		0x00000001
+ #define GPIO_1		0x00000002
+@@ -82,6 +86,40 @@
+ #define GPIO_31		0x80000000
+ 
+ 
++/* GPIO Register bit for 32-63 */
++#define GPIO_32         0x00000001
++#define GPIO_33         0x00000002
++#define GPIO_34         0x00000004
++#define GPIO_35         0x00000008
++#define GPIO_36         0x00000010
++#define GPIO_37         0x00000020
++#define GPIO_38         0x00000040
++#define GPIO_39         0x00000080
++#define GPIO_40         0x00000100
++#define GPIO_41         0x00000200
++#define GPIO_42         0x00000400
++#define GPIO_43         0x00000800
++#define GPIO_44         0x00001000
++#define GPIO_45         0x00002000
++#define GPIO_46         0x00004000
++#define GPIO_47         0x00008000
++#define GPIO_48         0x00010000
++#define GPIO_49         0x00020000
++#define GPIO_50         0x00040000
++#define GPIO_51         0x00080000
++#define GPIO_52         0x00100000
++#define GPIO_53         0x00200000
++#define GPIO_54         0x00400000
++#define GPIO_55         0x00800000
++#define GPIO_56         0x01000000
++#define GPIO_57         0x02000000
++#define GPIO_58         0x04000000
++#define GPIO_59         0x08000000
++#define GPIO_60         0x10000000
++#define GPIO_61         0x20000000
++#define GPIO_62         0x40000000
++#define GPIO_63         0x80000000
++
+ 
+ /* Bootstrap configuration bit definitions */
+ #define BOOTSTRAP_BOOT_OPT_MASK           0x7
+diff --git a/board/bitdefender/boxv2/Makefile b/board/bitdefender/boxv2/Makefile
+new file mode 100644
+index 0000000..2b8a00c
+--- /dev/null
++++ b/board/bitdefender/boxv2/Makefile
+@@ -0,0 +1,56 @@
++#
++# (C) Copyright 2006
++# Mindspeed Technologies, Inc. <www.mindspeed.com>
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 2 of the License, or
++# (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program; if not, write to the Free Software
++# Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
++#
++
++include $(TOPDIR)/config.mk
++ifneq ($(OBJTREE),$(SRCTREE))
++$(shell mkdir -p $(obj)../common)
++endif
++
++LIB	= $(obj)lib$(BOARD).o
++
++COBJS	:= board.o
++
++gcclibdir := $(shell dirname `$(CC) -print-libgcc-file-name`)
++
++HOST_CFLAGS = -Wall -pedantic -I$(TOPDIR)/include
++
++OBJS    := $(addprefix $(obj),$(COBJS))
++
++all:	$(LIB)
++
++$(LIB):	$(obj).depend $(OBJS)
++	$(call cmd_link_o_target, $(OBJS))
++
++board.o: board.c
++	$(CC) $(CFLAGS) -fpic -c -o $@ $<
++
++clean:
++	rm -f $(SOBJS) $(OBJS)
++
++distclean:	clean
++	rm -f $(LIB) core *.bak .depend
++
++#########################################################################
++
++# defines $(obj).depend target
++include $(SRCTREE)/rules.mk
++
++sinclude $(obj).depend
++
++#########################################################################
+diff --git a/board/bitdefender/boxv2/board.c b/board/bitdefender/boxv2/board.c
+new file mode 100644
+index 0000000..22d0eaa
+--- /dev/null
++++ b/board/bitdefender/boxv2/board.c
+@@ -0,0 +1,249 @@
++#include <common.h>
++#include <asm/io.h>
++#include <asm/arch/hardware.h>
++#include <asm/arch/gpio.h>
++#include <asm/arch/exp-bus.h>
++#include <asm/arch/clkcore.h>
++#include <asm/arch/comcerto-common.h>
++
++DECLARE_GLOBAL_DATA_PTR;
++
++
++#ifdef CONFIG_NAND_COMCERTO
++void nand_hw_init(void)
++{
++	comcerto_gpio_enable_output(EXP_NAND_CS); /* NAND CE */
++	comcerto_gpio_enable_input(EXP_NAND_RDY); /* NAND BR */
++}
++#endif
++
++static void exp_bus_init(void)
++{
++	//Exp bus soft reset
++	writel (0x1, EXP_SWRST_REG);
++	while(readl(EXP_SWRST_REG) & 0x1);
++
++	//16-bit NOR bus is used on C2K ASIC board
++	writel(((0x1) << 1), EXP_CS0_CFG_REG);
++
++	/* IBR, when booting from NOR, is changing expansion bus CS0 Mem Segment size to 1MiB
++	instead of the default reset value of 128MiB. Put back the reset default value */
++	writel(EXP_CS0_SEG_END_VAL, EXP_CS0_SEG_REG);
++
++	writel(EXP_CS1_BASE_VAL, EXP_CS1_BASE_REG);
++	writel(EXP_CS1_SEG_END_VAL, EXP_CS1_SEG_REG);
++
++	writel(EXP_CS2_BASE_VAL, EXP_CS2_BASE_REG);
++	writel(EXP_CS2_SEG_END_VAL, EXP_CS2_SEG_REG);
++
++	writel(EXP_CS3_BASE_VAL, EXP_CS3_BASE_REG);
++	writel(EXP_CS3_SEG_END_VAL, EXP_CS3_SEG_REG);
++
++#ifdef CONFIG_NAND_COMCERTO
++	writel(EXP_CS4_BASE_VAL, EXP_CS4_BASE_REG);
++	writel(EXP_CS4_SEG_END_VAL, EXP_CS4_SEG_REG);
++        //MLC NAND on EVM is 8-bit. Enable 8-bit bus
++        writel((readl(EXP_CS4_CFG_REG) & (~0x6)), EXP_CS4_CFG_REG);
++	writel(0x02020001,EXP_CS4_TMG1_REG);
++	writel(0x01010101,EXP_CS4_TMG2_REG);
++	writel(0x02,EXP_CS4_TMG3_REG);
++	writel(0x6,EXP_CLOCK_DIV_REG);
++#endif /* CONFIG_NAND_COMCERTO */
++
++}
++
++void s_init(void)
++{
++	int val;
++
++#ifdef CONFIG_COMCERTO_PLL
++	SoC_PLL_init();
++
++	/* Populate Part Number Info for Linux */
++	*((unsigned int *) IRAM_C2K_PART_NO_LOCATION) = *((unsigned int *)(COMCERTO_AXI_IRAM_BASE+0x30));
++#endif
++
++	comcerto_pad_config();
++
++	//DDRC ODT Source Select
++	*(volatile u32*) COMCERTO_GPIO_MISC_PIN_SELECT_REG = ( (1 << 6) | (*(volatile u32*) COMCERTO_GPIO_MISC_PIN_SELECT_REG));
++
++#ifdef CONFIG_COMCERTO_DDR
++	/*Double reset HFE helps some times */
++        val = readl(AXI_RESET_1);
++	writel((val | HFE_AXI_RESET), AXI_RESET_1);
++        writel((val & ~(HFE_AXI_RESET)), AXI_RESET_1);
++
++	SoC_DDR_init();
++        /* Disable remapping so that lower address space is mapped to DDR space */
++	writel((DISABLE_FABRIC_REMAP | readl(COMCERTO_GPIO_PAD_CTRL)), COMCERTO_GPIO_PAD_CTRL);
++
++#ifdef CONFIG_COMCERTO_DDR_ECC
++	writel(0x10000, DDRC_CTL_32_REG);
++	writel(0x10000, DDRC_CTL_33_REG);
++	writel(0x1f0023, DDR_PHY_CTL_00_REG);
++	ddr_ecc_init();
++	writel(0x30000, DDRC_CTL_32_REG);
++	writel(0x0, DDRC_CTL_33_REG);
++#endif	/* CONFIG_COMCERTO_DDR_ECC */
++#endif	/* CONFIG_COMCERTO_DDR */
++
++	exp_bus_init();
++
++	/* put all devices into reset */
++	
++		/* reset WiFi 5G */
++	            /* Wifi 5G DISABLE */
++                writel(readl(COMCERTO_GPIO_EXT_OUTPUT_REG) & ~GPIO_57, COMCERTO_GPIO_EXT_OUTPUT_REG);
++                writel( readl(COMCERTO_GPIO_EXT_OE_REG) | GPIO_57, COMCERTO_GPIO_EXT_OE_REG);
++                writel(readl(COMCERTO_GPIO_EXT_PIN_SELECT_REG) & ~GPIO_57, COMCERTO_GPIO_EXT_PIN_SELECT_REG);
++				/* Wifi 5G RST */
++				writel(readl(COMCERTO_GPIO_EXT_OUTPUT_REG) & ~GPIO_59, COMCERTO_GPIO_EXT_OUTPUT_REG);
++				writel( readl(COMCERTO_GPIO_EXT_OE_REG) | GPIO_59, COMCERTO_GPIO_EXT_OE_REG);
++				writel(readl(COMCERTO_GPIO_EXT_PIN_SELECT_REG) & ~GPIO_59, COMCERTO_GPIO_EXT_PIN_SELECT_REG);
++				/* Wifi 5G PERST */
++				writel(readl(COMCERTO_GPIO_EXT_OUTPUT_REG) & ~GPIO_58, COMCERTO_GPIO_EXT_OUTPUT_REG);
++				writel( readl(COMCERTO_GPIO_EXT_OE_REG) | GPIO_58, COMCERTO_GPIO_EXT_OE_REG);
++				writel(readl(COMCERTO_GPIO_EXT_PIN_SELECT_REG) & ~GPIO_58, COMCERTO_GPIO_EXT_PIN_SELECT_REG);
++	
++		/* reset WiFi 2,4G */
++				/* Wifi 2,4G DISABLE */
++				writel(readl(COMCERTO_GPIO_EXT_OUTPUT_REG) & ~GPIO_53, COMCERTO_GPIO_EXT_OUTPUT_REG);
++				writel( readl(COMCERTO_GPIO_EXT_OE_REG) | GPIO_53, COMCERTO_GPIO_EXT_OE_REG);
++				writel(readl(COMCERTO_GPIO_EXT_PIN_SELECT_REG) & ~GPIO_53, COMCERTO_GPIO_EXT_PIN_SELECT_REG);
++				/* Wifi 2,4G RST */
++				writel(readl(COMCERTO_GPIO_EXT_OUTPUT_REG) & ~GPIO_55, COMCERTO_GPIO_EXT_OUTPUT_REG);
++				writel( readl(COMCERTO_GPIO_EXT_OE_REG) | GPIO_55, COMCERTO_GPIO_EXT_OE_REG);
++				writel(readl(COMCERTO_GPIO_EXT_PIN_SELECT_REG) & ~GPIO_55, COMCERTO_GPIO_EXT_PIN_SELECT_REG);
++				/* Wifi 2,4G PERST */
++				writel(readl(COMCERTO_GPIO_EXT_OUTPUT_REG) & ~GPIO_54, COMCERTO_GPIO_EXT_OUTPUT_REG);
++				writel( readl(COMCERTO_GPIO_EXT_OE_REG) | GPIO_54, COMCERTO_GPIO_EXT_OE_REG);
++				writel(readl(COMCERTO_GPIO_EXT_PIN_SELECT_REG) & ~GPIO_54, COMCERTO_GPIO_EXT_PIN_SELECT_REG);
++
++		/* reset USB */
++				writel(readl(COMCERTO_GPIO_EXT_OUTPUT_REG) & ~GPIO_50, COMCERTO_GPIO_EXT_OUTPUT_REG);
++				writel( readl(COMCERTO_GPIO_EXT_OE_REG) | GPIO_50, COMCERTO_GPIO_EXT_OE_REG);
++				writel(readl(COMCERTO_GPIO_EXT_PIN_SELECT_REG) & ~GPIO_50, COMCERTO_GPIO_EXT_PIN_SELECT_REG);
++
++		/* reset PHY RGMII0 */
++				writel(readl(COMCERTO_GPIO_PIN_SELECT_REG) & ~((GPIO_10 << 10) || (GPIO_10 << 11)), COMCERTO_GPIO_PIN_SELECT_REG);
++				writel( readl(COMCERTO_GPIO_OE_REG) | GPIO_10, COMCERTO_GPIO_OE_REG);
++				writel(readl(COMCERTO_GPIO_OUTPUT_REG) & ~GPIO_10, COMCERTO_GPIO_OUTPUT_REG);
++
++		/* reset PHY RGMII1 */
++				writel(readl(COMCERTO_GPIO_PIN_SELECT_REG) & ~((GPIO_11 << 11) || (GPIO_11 << 12)), COMCERTO_GPIO_PIN_SELECT_REG);
++				writel( readl(COMCERTO_GPIO_OE_REG) | GPIO_11, COMCERTO_GPIO_OE_REG);
++				writel(readl(COMCERTO_GPIO_OUTPUT_REG) & ~GPIO_11, COMCERTO_GPIO_OUTPUT_REG);
++
++
++
++	/* unreset everything */
++		/* unreset WiFi 5G */
++				/* Wifi 5G DISABLE */
++				writel(readl(COMCERTO_GPIO_EXT_OUTPUT_REG) & ~GPIO_57, COMCERTO_GPIO_EXT_OUTPUT_REG);
++				writel( readl(COMCERTO_GPIO_EXT_OE_REG) & ~GPIO_57, COMCERTO_GPIO_EXT_OE_REG);
++				writel(readl(COMCERTO_GPIO_EXT_OUTPUT_REG) | GPIO_57, COMCERTO_GPIO_EXT_OUTPUT_REG);
++				writel(readl(COMCERTO_GPIO_EXT_PIN_SELECT_REG) | GPIO_57, COMCERTO_GPIO_EXT_PIN_SELECT_REG);
++				/* Wifi 5G RST */
++				writel(readl(COMCERTO_GPIO_EXT_OUTPUT_REG) & ~GPIO_59, COMCERTO_GPIO_EXT_OUTPUT_REG);
++				writel( readl(COMCERTO_GPIO_EXT_OE_REG) & ~GPIO_59, COMCERTO_GPIO_EXT_OE_REG);
++				writel(readl(COMCERTO_GPIO_EXT_OUTPUT_REG) | GPIO_59, COMCERTO_GPIO_EXT_OUTPUT_REG);
++				writel(readl(COMCERTO_GPIO_EXT_PIN_SELECT_REG) | GPIO_59, COMCERTO_GPIO_EXT_PIN_SELECT_REG);
++				/* Wifi 5G PERST */
++				writel(readl(COMCERTO_GPIO_EXT_OUTPUT_REG) & ~GPIO_58, COMCERTO_GPIO_EXT_OUTPUT_REG);
++				writel( readl(COMCERTO_GPIO_EXT_OE_REG) & ~GPIO_58, COMCERTO_GPIO_EXT_OE_REG);
++				writel(readl(COMCERTO_GPIO_EXT_OUTPUT_REG) | GPIO_58, COMCERTO_GPIO_EXT_OUTPUT_REG);
++				writel(readl(COMCERTO_GPIO_EXT_PIN_SELECT_REG) | GPIO_58, COMCERTO_GPIO_EXT_PIN_SELECT_REG);
++		/* unreset WiFi 2,4G */
++				/* Wifi 2,4G DISABLE */
++				writel(readl(COMCERTO_GPIO_EXT_OUTPUT_REG) & ~GPIO_53, COMCERTO_GPIO_EXT_OUTPUT_REG);
++				writel( readl(COMCERTO_GPIO_EXT_OE_REG) & ~GPIO_53, COMCERTO_GPIO_EXT_OE_REG);
++				writel(readl(COMCERTO_GPIO_EXT_OUTPUT_REG) | GPIO_53, COMCERTO_GPIO_EXT_OUTPUT_REG);
++				writel(readl(COMCERTO_GPIO_EXT_PIN_SELECT_REG) | GPIO_53, COMCERTO_GPIO_EXT_PIN_SELECT_REG);
++				/* Wifi 2,4G RST */
++				writel(readl(COMCERTO_GPIO_EXT_OUTPUT_REG) & ~GPIO_55, COMCERTO_GPIO_EXT_OUTPUT_REG);
++				writel( readl(COMCERTO_GPIO_EXT_OE_REG) & ~GPIO_55, COMCERTO_GPIO_EXT_OE_REG);
++				writel(readl(COMCERTO_GPIO_EXT_OUTPUT_REG) | GPIO_55, COMCERTO_GPIO_EXT_OUTPUT_REG);
++				writel(readl(COMCERTO_GPIO_EXT_PIN_SELECT_REG) | GPIO_55, COMCERTO_GPIO_EXT_PIN_SELECT_REG);
++				/* Wifi 2,4G PERST */
++				writel(readl(COMCERTO_GPIO_EXT_OUTPUT_REG) & ~GPIO_54, COMCERTO_GPIO_EXT_OUTPUT_REG);
++				writel( readl(COMCERTO_GPIO_EXT_OE_REG) & ~GPIO_54, COMCERTO_GPIO_EXT_OE_REG);
++				writel(readl(COMCERTO_GPIO_EXT_OUTPUT_REG) | GPIO_54, COMCERTO_GPIO_EXT_OUTPUT_REG);
++				writel(readl(COMCERTO_GPIO_EXT_PIN_SELECT_REG) | GPIO_54, COMCERTO_GPIO_EXT_PIN_SELECT_REG);
++
++		/* unreset USB */
++		/*
++				writel(readl(COMCERTO_GPIO_EXT_OUTPUT_REG) & ~GPIO_50, COMCERTO_GPIO_EXT_OUTPUT_REG);
++				writel( readl(COMCERTO_GPIO_EXT_OE_REG) & ~GPIO_50, COMCERTO_GPIO_EXT_OE_REG);
++				writel(readl(COMCERTO_GPIO_EXT_OUTPUT_REG) | GPIO_50, COMCERTO_GPIO_EXT_OUTPUT_REG);
++				writel(readl(COMCERTO_GPIO_EXT_PIN_SELECT_REG) | GPIO_50, COMCERTO_GPIO_EXT_PIN_SELECT_REG);
++		*/
++		
++		/* unreset PHY RGMII0 */
++				writel(readl(COMCERTO_GPIO_PIN_SELECT_REG) & ~((GPIO_10 << 10) || (GPIO_10 << 11)), COMCERTO_GPIO_PIN_SELECT_REG);
++				writel( readl(COMCERTO_GPIO_OE_REG) | GPIO_10, COMCERTO_GPIO_OE_REG);
++				writel(readl(COMCERTO_GPIO_OUTPUT_REG) | GPIO_10, COMCERTO_GPIO_OUTPUT_REG);
++		/* unreset PHY RGMII1 */
++				writel(readl(COMCERTO_GPIO_PIN_SELECT_REG) & ~((GPIO_11 << 11) || (GPIO_11 << 12)), COMCERTO_GPIO_PIN_SELECT_REG);
++				writel( readl(COMCERTO_GPIO_OE_REG) | GPIO_11, COMCERTO_GPIO_OE_REG);
++				writel(readl(COMCERTO_GPIO_OUTPUT_REG) | GPIO_11, COMCERTO_GPIO_OUTPUT_REG);
++
++#ifdef CONFIG_NAND_COMCERTO
++	nand_hw_init();
++#endif
++}
++
++int c2000_eth_board_init(char *devname, int eth_port)
++{
++        //eth0 port is chosen as criteria for bringingup out of reset because
++        //all MDIO access can happen through EMAC0 and without bringing eth0 first
++        //no Switch/PHY configuration can happen and no point in removing reset without eth0
++        if(eth_port == 0)
++        {
++                //AR8327 Switch init
++   //             athrs17_init(devname);
++
++                //AR8327 WAN PHY4 init
++   //             athrs17_phy_setup(devname,EMAC0_PHY_ADDR);
++        }
++        else
++        {
++                //AR8327 LAN PHYs init
++   //             athrs17_phy_setup(devname,EMAC1_PHY_ADDR);
++        }
++
++}
++
++#if defined(CONFIG_SHOW_BOOT_PROGRESS)
++void show_boot_progress(int progress)
++{
++	printf("Boot reached stage %d\n", progress);
++}
++#endif /* CONFIG_SHOW_BOOT_PROGRESS */
++
++int dram_init(void)
++{
++        gd->bd->bi_dram[0].start = CONFIG_SYS_SDRAM_BASE;
++        gd->bd->bi_dram[0].size = CONFIG_SYS_SDRAM_SIZE; //512 MB
++	gd->ram_size = get_ram_size((void *) CONFIG_SYS_SDRAM_BASE,
++			CONFIG_SYS_SDRAM_SIZE);
++	return 0;
++
++}
++
++int board_init(void)
++{
++        /* arch number of Mindspeed Comcerto */
++        gd->bd->bi_arch_number = MACH_TYPE_COMCERTO;
++
++        /* adress of boot parameters */
++        gd->bd->bi_boot_params = CONFIG_SYS_SDRAM_BASE + 0x100;
++
++        return 0;
++}
++
++int HAL_get_c2k_revision()
++{
++        return (readl(COMCERTO_GPIO_DEVICE_ID_REG) >> 24) & 0xF;
++}
++
+diff --git a/boards.cfg b/boards.cfg
+index f86b45c..5cf3d54 100644
+--- a/boards.cfg
++++ b/boards.cfg
+@@ -302,6 +302,7 @@ c2kmfcnevm-nand              arm         armv7       c2kmfcnevm          mindspe
+ c2kevm-nand                  arm         armv7       c2kevm              mindspeed      comcerto
+ c2kasic                      arm         armv7       c2kasic             mindspeed      comcerto
+ c2kasic-nand                 arm         armv7       c2kasic             mindspeed      comcerto
++boxv2                        arm         armv7       boxv2               bitdefender    comcerto
+ socfpga_cyclone5             arm         armv7       socfpga_cyclone5    altera         socfpga
+ actux1_4_16                  arm         ixp         actux1              -              -           actux1:FLASH2X2
+ actux1_4_32                  arm         ixp         actux1              -              -           actux1:FLASH2X2,RAM_32MB
+diff --git a/drivers/mtd/nand/nand_base.c b/drivers/mtd/nand/nand_base.c
+index a2d06be..4ea0b6d 100644
+--- a/drivers/mtd/nand/nand_base.c
++++ b/drivers/mtd/nand/nand_base.c
+@@ -2576,6 +2576,9 @@ static int nand_flash_detect_onfi(struct mtd_info *mtd, struct nand_chip *chip,
+ 	mtd->oobsize = le16_to_cpu(p->spare_bytes_per_page);
+ 	chip->chipsize = le32_to_cpu(p->blocks_per_lun);
+ 	chip->chipsize *= (uint64_t)mtd->erasesize * p->lun_count;
++#ifdef CONFIG_BOXV2
++	chip->chipsize = chip->chipsize / 2;
++#endif
+ 	*busw = 0;
+ 	if (le16_to_cpu(p->features) & 1)
+ 		*busw = NAND_BUSWIDTH_16;
+diff --git a/include/configs/boxv2.h b/include/configs/boxv2.h
+new file mode 100644
+index 0000000..d504505
+--- /dev/null
++++ b/include/configs/boxv2.h
+@@ -0,0 +1,292 @@
++/*
++ * Copyright (C) 2013 Mindspeed Technologies, Inc.
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
++ *
++ */
++
++#ifndef __CONFIG_BOXV2_H
++#define __CONFIG_BOXV2_H
++
++#define CONFIG_SYS_NO_FLASH
++
++#define CONFIG_ARMV7 /* This is an ARM V7 CPU core */
++
++#define CONFIG_COMCERTO_2000
++#define MACH_TYPE_COMCERTO	1094
++#define CONFIG_MACH_TYPE	MACH_TYPE_COMCERTO
++#define CONFIG_BOXV2
++
++#include <asm/hardware.h>
++
++/* CPU clock */
++#define CONFIG_SYS_HZ		1200		/* decrementer freq: 1 ms ticks */
++
++/*
++ * RAM configuration
++ */
++#define CONFIG_NR_DRAM_BANKS		1
++#define CONFIG_SYS_TEXT_BASE		0x1000000
++#define CONFIG_SYS_SDRAM_BASE		COMCERTO_AXI_DDR_BASE
++#define CONFIG_SYS_SDRAM_SIZE		(1024 * 1024 * 1024)
++#define CONFIG_SYS_MEMTEST_START	0x0300000	/* memtest works on     */
++#define CONFIG_SYS_MEMTEST_END		0x0700000	/* 3 ... 7 MB in DRAM   */
++
++#undef  CONFIG_SHOW_BOOT_PROGRESS
++
++/*
++ * UART configuration
++ */
++/* define one of these to choose the UART0 or UART1 as console */
++#define CONFIG_UART0		1	/* TODO We use UART1. Change it along with driver */
++#define CONFIG_BAUDRATE		115200
++#define CONFIG_BAUDRATE_TABLE	{115200, 19200, 38400, 57600, 9600}
++#define CONFIG_COMCERTO_SERIAL
++
++#define CONFIG_NAND_COMCERTO
++
++/* Expansion Bus Configuration */
++#define EXP_CS0_BASE_VAL	0x0
++#define EXP_CS0_SEG_SIZE_VAL	0x7FFF
++#define EXP_CS0_SEG_END_VAL	(EXP_CS0_BASE_VAL + EXP_CS0_SEG_SIZE_VAL)
++
++#define EXP_CS1_BASE_VAL	(EXP_CS0_SEG_END_VAL + 1)
++#define EXP_CS1_SEG_SIZE_VAL	0xFF
++#define EXP_CS1_SEG_END_VAL	(EXP_CS1_BASE_VAL + EXP_CS1_SEG_SIZE_VAL)
++
++#define EXP_CS2_BASE_VAL	(EXP_CS1_SEG_END_VAL + 1)
++#define EXP_CS2_SEG_SIZE_VAL	0xFF
++#define EXP_CS2_SEG_END_VAL	(EXP_CS2_BASE_VAL + EXP_CS2_SEG_SIZE_VAL)
++
++#define EXP_CS3_BASE_VAL	(EXP_CS2_SEG_END_VAL + 1)
++#define EXP_CS3_SEG_SIZE_VAL	0xFF
++#define EXP_CS3_SEG_END_VAL	(EXP_CS3_BASE_VAL + EXP_CS3_SEG_SIZE_VAL)
++
++#define EXP_CS4_BASE_VAL	(EXP_CS3_SEG_END_VAL + 1)
++#define EXP_CS4_SEG_SIZE_VAL	0xFF
++#define EXP_CS4_SEG_END_VAL	(EXP_CS4_BASE_VAL + EXP_CS4_SEG_SIZE_VAL)
++
++#define SHIFT_4K_MUL	12
++
++#define COMCERTO_EXP_CS4_BASE_ADDR	(COMCERTO_AXI_EXP_BASE + (EXP_CS4_BASE_VAL << SHIFT_4K_MUL))
++
++#define CONFIG_SYS_MAX_NAND_DEVICE	1
++#define CONFIG_SYS_NAND_MAX_CHIPS	1
++#define CONFIG_SYS_NAND_BASE		COMCERTO_EXP_CS4_BASE_ADDR
++#define CONFIG_SYS_NAND_SELF_INIT
++#define CONFIG_SYS_NAND_ONFI_DETECTION
++#define CONFIG_NAND_COMCERTO_ECC_24_HW_BCH
++//#define CONFIG_NAND_COMCERTO_ECC_8_HW_BCH
++#define CONFIG_COMCERTO_NAND_ERASE_FBB
++#define CONFIG_MACH_COMCERTO_C2K_EVM
++//#define CONFIG_NAND_TYPE_SLC
++#define CONFIG_SYS_NAND_USE_FLASH_BBT
++#define NAND_BBT_SIZE			(1024 * 1024)
++
++
++#define CONFIG_CMD_NAND_TRIMFFS
++
++/* SPI Driver */
++#define CONFIG_DRIVER_SPI_C2K
++
++/* OTP Driver */
++#define CONFIG_DRIVER_OTP
++
++/* SPACC Driver */
++#define CONFIG_DRIVER_SPACC
++
++/* Enable Secure boot*/
++#define CONFIG_SECUREBOOT
++
++/*SPI NOR Flash CS:0*/
++#define SPI_FLASH_SIZE						(64 * 1024) /* 64 kB */
++#define SPI_FLASH_NOR_PAGE_SIZE   			256 /* Bytes */
++#define SPI_FLASH_SECTOR_SIZE     			(32 * 1024)
++#define SPI_FLASH_NUM_SECTORS     			(SPI_FLASH_SIZE/SPI_FLASH_SECTOR_SIZE)
++#define SPI_FLASH_NUM_PAGES_PER_SEC       	(SPI_FLASH_SECTOR_SIZE/SPI_FLASH_NOR_PAGE_SIZE)
++
++#if 0
++/*
++ * flash configuration - using cfi driver
++ */
++#define NOR_FLASH_BASE			COMCERTO_AXI_EXP_BASE	/* Flash Bank #1 */
++#define NOR_FLASH_SECT_SIZE		(128 * 1024)		/* 128 KiB sectors */
++#define NOR_FLASH_SECT_COUNT		512
++
++#define CONFIG_SYS_FLASH_BASE		(NOR_FLASH_BASE)	/* Physical start address of Flash memory */
++#define CONFIG_SYS_FLASH_SIZE		(64 * 1024 * 1024)	/* 64 MB */
++#define CONFIG_SYS_MAX_FLASH_SECT	NOR_FLASH_SECT_COUNT	/* max number of sectors on one chip */
++#define CONFIG_SYS_MAX_FLASH_BANKS	1
++#define CONFIG_SYS_FLASH_CFI		1
++#define CONFIG_SYS_FLASH_PROTECTION
++#define CONFIG_SYS_FLASH_USE_BUFFER_WRITE 1	/* use buffered writes (20x faster)	*/
++#define CONFIG_SYS_FLASH_EMPTY_INFO		/* print 'E' for empty sector on flinfo */
++#define CONFIG_FLASH_CFI_DRIVER		1
++#endif
++#define CONFIG_SYS_FLASH_ERASE_TOUT	(2 * CONFIG_SYS_HZ)	/* Timeout for Flash Erase (in ms)	*/
++#define CONFIG_SYS_FLASH_WRITE_TOUT	(1 * CONFIG_SYS_HZ)	/* Timeout for Flash Write (in ms)	*/
++
++#define CONFIG_MTD_DEVICE
++#define MTDIDS_DEFAULT			"nand0=comcertonand"
++
++/*
++ *  * Gemac Settings
++ *   */
++#define EMAC0_PHY_ADDR		6
++#define EMAC1_PHY_ADDR		7
++#define EMAC0_FLAGS		0
++#define EMAC1_FLAGS		0
++#define EMAC2_FLAGS		0
++
++#define CONFIG_NET_MULTI        1
++#define CONFIG_MII
++#define CONFIG_PHYLIB
++#define CONFIG_PHY_ATHEROS
++#define CONFIG_PHY_GIGE
++
++
++/* Enviroment */
++#define CONFIG_ENV_OVERWRITE
++#define CONFIG_ENV_IS_IN_NAND		1
++//#define CONFIG_ENV_IS_IN_C2K_SPI_FLASH	1
++
++#if defined (CONFIG_ENV_IS_IN_NAND)
++#define CONFIG_ENV_OFFSET		0x00100000
++#define CONFIG_ENV_SIZE			0x20000	/* Total Size of Environment 128KiB */
++#elif defined CONFIG_ENV_IS_IN_C2K_SPI_FLASH
++#define CONFIG_ENV_OFFSET		0
++#define CONFIG_ENV_SPI_SECTOR		10
++#define CONFIG_ENV_SIZE			0x20000	/* Total Size of Environment 128KiB */
++#define CONFIG_ENV_SECT_SIZE		0x20000
++#endif
++
++#define CONFIG_SYS_MALLOC_LEN		(CONFIG_ENV_SIZE + 128 * 1024) + (NAND_BBT_SIZE)
++#define CONFIG_SYS_INIT_RAM_ADDR	0x01000000 /* DDR address */
++#define CONFIG_SYS_INIT_RAM_SIZE	0x00080000 /* 512K */
++#define CONFIG_SYS_GBL_DATA_SIZE	128	/* size in bytes reserved for initial data */
++#define CONFIG_SYS_GBL_DATA_OFFSET	((CONFIG_SYS_INIT_RAM_ADDR + CONFIG_SYS_INIT_RAM_SIZE) - CONFIG_SYS_GBL_DATA_SIZE)
++#define CONFIG_SYS_INIT_SP_ADDR		CONFIG_SYS_GBL_DATA_OFFSET
++
++#define CONFIG_SYS_PROMPT		"U-Boot> "
++#define CONFIG_SYS_CBSIZE		1024 /* Console I/O Buffer Size */
++#define CONFIG_SYS_PBSIZE		(CONFIG_SYS_CBSIZE + \
++						sizeof(CONFIG_SYS_PROMPT) + 16)
++
++#define CONFIG_SYS_LOAD_ADDR		(CONFIG_SYS_SDRAM_BASE + 0x01000000) /* default load address */
++#define CONFIG_SYS_MAXARGS		15 /* max number of command args */
++#define CONFIG_SYS_LONGHELP
++#define CONFIG_AUTO_COMPLETE
++#define CONFIG_CMDLINE_EDITING
++
++/* Commands */ /* TODO */
++#include <config_cmd_default.h>
++
++/*#undef CONFIG_CMD_BDI*/
++#define CONFIG_SYS_ALT_MEMTEST
++#undef CONFIG_CMD_FPGA
++#undef CONFIG_CMD_IMI
++#undef CONFIG_CMD_IMLS
++#undef CONFIG_CMD_LOADS
++#undef CONFIG_CMD_SOURCE
++
++#define CONFIG_CMD_FLASH	/* flinfo, erase, protect	*/
++#define CONFIG_CMD_SAVEENV
++#define CONFIG_CMD_MTDPARTS
++#define CONFIG_CMD_NAND
++
++#define CONFIG_CMD_PING
++#define CONFIG_CMD_MII
++#define CONFIG_CMD_PFE_COMMANDS
++#define CONFIG_CMD_PFE_STATS
++#define CONFIG_CMD_DHCP
++
++#define CONFIG_CMD_SOCINFO
++#define CONFIG_CMD_UPDATE_SPI
++
++/*
++ * Environment Configuration
++ */
++#define CONFIG_BOOTCOMMAND	"nand read 0x3000000 0x200000 0x400000; bootm 0x3000000;"
++#define CONFIG_BOOTARGS         "console=ttyS0,115200 "			\
++				"init=/etc/preinit "			\
++				"root=ubi0:rootfs "			\
++				"ubi.mtd=3,4096 "			\
++				"rootfstype=ubifs rw "			\
++				"noinitrd "				\
++				"mtdparts=comcertonand:"		\
++					"1M(u-boot)ro,"			\
++					"1M(env),"			\
++					"4M(kernel),"			\
++					"122M(rootfs),"			\
++                                        "-(datafs) "                     \
++				"usb3_internal_clk=yes pcie_gen1_only=yes"
++
++#define CONFIG_MTDPARTS		"1M(u-boot)ro,1M(env),4M(kernel),122M(rootfs),-(datafs)"
++#define CONFIG_MTDPARTS_NAND	"mtdparts=comcertonand:1M(u-boot)ro,1M(env),4M(kernel),122M(rootfs),-(datafs)"
++#define MTDPARTS_DEFAULT	"mtdparts=comcertonand:"CONFIG_MTDPARTS
++
++#define	CONFIG_EXTRA_ENV_SETTINGS											\
++	"hostname=comcerto2000\0"											\
++	"netdev=eth0\0"													\
++	"nfsargs=setenv bootargs init=${init_process} root=/dev/nfs rw "						\
++		"nfsroot=${serverip}:${rootpath}\0"									\
++	"flashargs=setenv bootargs init=${init_process} root=/dev/mtdblock4 rootfstype=${rootfstype} rw\0"		\
++	"rootfstype=ubifs\0"												\
++	"init_process=/etc/preinit\0"											\
++	"addip=setenv bootargs ${bootargs} "										\
++		"ip=${ipaddr}:${serverip}:${gatewayip}:${netmask}"							\
++		":${hostname}:${netdev}:off\0"										\
++	"addeth=setenv bootargs ${bootargs} "										\
++	"hwaddress=${netdev},${ethaddr}\0"										\
++	"addtty=setenv bootargs ${bootargs} console=ttyS0,115200n8\0"							\
++	"addmtd=setenv bootargs ${bootargs} ${mtdparts}\0"								\
++	"flash_self=run flashargs addip addtty;"									\
++		"bootm ${kernel_addr}\0"										\
++	"boot_nfs=nfs 80600000 ${rootpath}/boot/${kernelfile};run nfsargs addeth addip addtty;"				\
++	        "bootm 80600000\0"											\
++	"boot_flash=run flashargs addeth addtty addmtd; bootm 0xc0080000\0"						\
++	"boot_flashold=run flashargs addeth addtty addmtd; fsload /boot/uImage; bootm\0"				\
++	"loadaddr=0x3000000\0"												\
++	"rootpath=/devel/fs-c2kasic\0"											\
++	"kernelfile=uImage\0"												\
++	"bootfile=u-boot.bin\0"												\
++	"mtdids=" MTDIDS_DEFAULT "\0"											\
++	"mtdparts=" MTDPARTS_DEFAULT "\0"										\
++	"mtddevnum=2\0"													\
++	"mtddevname=fs\0"												\
++	"fsfile=root.jffs2-128k\0"											\
++	"updatefs=tftp 3000000 ${fsfile};protect off 1:36-420\;erase 1:36-420;cp.b 3000000 c0480000 ${filesize}\0"	\
++	"updatekernel=tftp 3000000 ${kernelfile};protect off 1:4-35\;erase 1:4-35;cp.b 3000000 c0080000 ${filesize}\0"	\
++	"updateboot=tftp 3000000 ${bootfile};protect off 1:1-3\;erase 1:1-3;cp.b 3000000 c0020000 ${filesize}\0"	\
++	"updateuloader=tftp 3000000 uloader.bin;protect off 1:0-1\;erase 1:0-1;cp.b 3000000 c0000000 ${filesize}\0"	\
++	"updatefs_nand=tftp 0000000 ${fsfile}; nand erase.part rootfs; nand write.trimffs ${fileaddr} rootfs ${filesize}\0"		\
++	"updatekernel_nand=tftp 3000000 ${kernelfile}; nand erase.part kernel; nand write ${fileaddr} kernel ${filesize}\0"\
++	"updateboot_nand=tftp 3000000 ${bootfile}; nand erase.part u-boot; nand write ${fileaddr} u-boot ${filesize}\0"	\
++	""
++
++#define CONFIG_ETHADDR		00:aa:bb:cc:dd:ee
++#define CONFIG_IPADDR		192.168.0.2
++#define CONFIG_SERVERIP		192.168.0.1
++#define CONFIG_BOOTDELAY	3
++
++/*
++ * Misc configuration options
++ */
++#define CONFIG_CMDLINE_TAG		1	/* enable passing of ATAGs	*/
++#define CONFIG_SETUP_MEMORY_TAGS	1
++//#define CONFIG_INITRD_TAG		1
++
++#endif /* __CONFIG_BOXV2_H */
++

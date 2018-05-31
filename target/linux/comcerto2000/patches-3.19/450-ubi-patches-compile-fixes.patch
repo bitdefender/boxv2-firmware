@@ -1,0 +1,13 @@
+Index: linux-3.19.3/drivers/mtd/ubi/io.c
+===================================================================
+--- linux-3.19.3.orig/drivers/mtd/ubi/io.c
++++ linux-3.19.3/drivers/mtd/ubi/io.c
+@@ -924,7 +924,7 @@ static int validate_vid_hdr(const struct
+ 	}
+ 
+ 	if (data_size > ubi->leb_size) {
+-		ubi_err("bad data_size");
++		ubi_err(ubi, "bad data_size");
+ 		goto bad;
+ 	}
+ 

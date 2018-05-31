@@ -1,0 +1,26 @@
+diff -rupN libnetfilter_conntrack-1.0.4/src/conntrack/build.c libnetfilter_conntrack-1.0.4-Modified/src/conntrack/build.c
+--- libnetfilter_conntrack-1.0.4/src/conntrack/build.c	2013-06-05 17:44:08.283944508 +0530
++++ libnetfilter_conntrack-1.0.4-Modified/src/conntrack/build.c	2015-05-29 18:25:10.422672000 +0530
+@@ -398,6 +398,13 @@ static void __build_zone(struct nfnlhdr
+ 	nfnl_addattr16(&req->nlh, size, CTA_ZONE, htons(ct->zone));
+ }
+ 
++static void __build_id(struct nfnlhdr *req,
++			size_t size,
++			const struct nf_conntrack *ct)
++{
++	nfnl_addattr32(&req->nlh, size, CTA_ID, htonl(ct->id));
++}
++
+ static void __build_labels(struct nfnlhdr *req,
+ 			   size_t size,
+ 			   const struct nf_conntrack *ct)
+@@ -527,5 +534,8 @@ int __build_conntrack(struct nfnl_subsys
+ 	if (test_bit(ATTR_CONNLABELS, ct->head.set))
+ 		__build_labels(req, size, ct);
+ 
++	if (test_bit(ATTR_ID, ct->head.set))
++		__build_id(req, size, ct);
++
+ 	return 0;
+ }

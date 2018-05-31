@@ -1,0 +1,161 @@
+Index: linux-3.19.3/fs/binfmt_elf.c
+===================================================================
+--- linux-3.19.3.orig/fs/binfmt_elf.c
++++ linux-3.19.3/fs/binfmt_elf.c
+@@ -550,6 +550,7 @@ static inline int arch_check_elf(struct
+ 
+ #endif /* !CONFIG_ARCH_BINFMT_ELF_STATE */
+ 
++#ifdef CONFIG_BINFMT_ELF_SIGNATURE
+ // skip is returned only due to missing i_version or unsupported fstype, and
+ // is not stored in 'cache' (i.e. in vfs_inode)
+ 
+@@ -630,6 +631,8 @@ static void sig_cache_add(struct file *f
+ 		inode->i_version, sig_valid);
+ }
+ 
++#endif // CONFIG_BINFMT_ELF_SIGNATURE
++
+ /* This is much more generalized than the library routine read function,
+    so we keep this separate.  Technically the library read function
+    is only provided so that we can read a.out libraries that have
+@@ -645,16 +648,18 @@ static unsigned long load_elf_interp(str
+ 	unsigned long last_bss = 0, elf_bss = 0;
+ 	unsigned long error = ~0UL;
+ 	unsigned long total_size;
+-	enum sig_cache_result_t sig_cache_result;
+ 	struct elf_sig_data *esd = NULL;
+ 	bool first_signed_phdr = true;
+ 	int i;
++#ifdef CONFIG_BINFMT_ELF_SIGNATURE
++	enum sig_cache_result_t sig_cache_result;
+ 
+ 	sig_cache_result = sig_cache_lookup(interpreter);
+ 	if (sig_cache_result == SIG_CACHE_INVALID) {
+ 		send_sig(SIGKILL, current, 0);
+ 		return -EINVAL;
+ 	}
++#endif
+ 
+ 	/* First of all, some simple consistency checks */
+ 	if (interp_elf_ex->e_type != ET_EXEC &&
+@@ -672,6 +677,7 @@ static unsigned long load_elf_interp(str
+ 		goto out;
+ 	}
+ 	
++#ifdef CONFIG_BINFMT_ELF_SIGNATURE
+ 	if (sig_cache_result == SIG_CACHE_MISS) {
+ 		bool invalid;
+ 
+@@ -695,6 +701,7 @@ static unsigned long load_elf_interp(str
+ 			goto out;
+ 		}
+ 	}
++#endif
+ 
+ 	eppnt = interp_elf_phdata;
+ 	for (i = 0; i < interp_elf_ex->e_phnum; i++, eppnt++) {
+@@ -774,6 +781,7 @@ static unsigned long load_elf_interp(str
+ 		}
+ 	}
+ 
++#ifdef CONFIG_BINFMT_ELF_SIGNATURE
+ 	/* Finalize digest and do signature verification */
+ 	if (esd) {
+ 		error = elf_finalize_digest_verify_signature(esd);
+@@ -785,6 +793,7 @@ static unsigned long load_elf_interp(str
+ 			goto out;
+ 		}
+ 	}
++#endif
+ 
+ 	if (last_bss > elf_bss) {
+ 		/*
+@@ -839,6 +848,8 @@ static unsigned long randomize_stack_top
+ #endif
+ }
+ 
++#ifdef CONFIG_BINFMT_ELF_SIGNATURE
++
+ //enum hash_algo
+ static const char *pkey_hash_algo[PKEY_HASH__LAST] = {
+ 	NULL,       // MD4,
+@@ -848,7 +859,6 @@ static const char *pkey_hash_algo[PKEY_H
+ 	"sha256",   // SHA256,
+ };
+ 
+-#ifdef CONFIG_BINFMT_ELF_SIGNATURE
+ /* Elf Signature Verification related stuff */
+ static int esd_shash_init(struct elf_sig_data *esd)
+ {
+@@ -1226,11 +1236,11 @@ int verify_elf(struct file *filp)
+ 	unsigned long load_addr = 0;
+ 	bool load_addr_set = false;
+ 	unsigned long total_size;
+-	enum sig_cache_result_t sig_cache_result;
+ 	struct elf_sig_data *esd = NULL;
+ 	bool first_signed_phdr = true;
+ 	int error = -EINVAL;
+ 	int i, ret;
++	enum sig_cache_result_t sig_cache_result;
+ 
+ 	sig_cache_result = sig_cache_lookup(filp);
+ 
+@@ -1427,7 +1437,6 @@ static int load_elf_binary(struct linux_
+ 	unsigned long start_code, end_code, start_data, end_data;
+ 	unsigned long reloc_func_desc __maybe_unused = 0;
+ 	int executable_stack = EXSTACK_DEFAULT;
+-	enum sig_cache_result_t sig_cache_result;
+ 	struct elf_sig_data *esd = NULL;
+ 	bool first_signed_phdr = true;
+ 	struct pt_regs *regs = current_pt_regs();
+@@ -1436,12 +1445,15 @@ static int load_elf_binary(struct linux_
+ 		struct elfhdr interp_elf_ex;
+ 	} *loc;
+ 	struct arch_elf_state arch_state = INIT_ARCH_ELF_STATE;
++#ifdef CONFIG_BINFMT_ELF_SIGNATURE
++	enum sig_cache_result_t sig_cache_result;
+ 
+ 	sig_cache_result = sig_cache_lookup(bprm->file);
+ 	if (sig_cache_result == SIG_CACHE_INVALID) {
+ 		send_sig(SIGKILL, current, 0);
+ 		return -EINVAL;
+ 	}
++#endif
+ 
+ 	loc = kmalloc(sizeof(*loc), GFP_KERNEL);
+ 	if (!loc) {
+@@ -1617,6 +1629,7 @@ static int load_elf_binary(struct linux_
+ 	
+ 	current->mm->start_stack = bprm->p;
+ 	
++#ifdef CONFIG_BINFMT_ELF_SIGNATURE
+ 	if (sig_cache_result == SIG_CACHE_MISS) {
+ 		bool invalid;
+ 
+@@ -1640,6 +1653,7 @@ static int load_elf_binary(struct linux_
+ 			goto out_free_dentry;
+ 		}
+ 	}
++#endif
+ 
+ 	/* Now we do a little grungy work by mmapping the ELF image into
+ 	   the correct location in memory. */
+@@ -1776,7 +1790,8 @@ static int load_elf_binary(struct linux_
+ 		if (k > elf_brk)
+ 			elf_brk = k;
+ 	}
+-
++    
++#ifdef CONFIG_BINFMT_ELF_SIGNATURE
+ 	/* Finalize digest and do signature verification */
+ 	if (esd) {
+ 		retval = elf_finalize_digest_verify_signature(esd);
+@@ -1788,6 +1803,7 @@ static int load_elf_binary(struct linux_
+ 			goto out_free_dentry;
+ 		}
+ 	}
++#endif
+ 
+ 	loc->elf_ex.e_entry += load_bias;
+ 	elf_bss += load_bias;

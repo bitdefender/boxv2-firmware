@@ -1,0 +1,11 @@
+SOURCE : ffmpeg 0.8.7 version package took from Openwrt Attitude Adjustment 12.09 packages base and SVN revision is 36089.
+SOURCE PATH : https://dev.openwrt.org/browser/branches/packages_12.09/multimedia/ffmpeg/?rev=36089
+SUPPORT : ffmpeg library. DLNA library package depends on this package.
+CHANGES :
+1. Makefile : 
+   - Updated the ffmpeg version from 0.8.7 to 1.1.1.
+   - Modified the Makefile and removed the unwanted features and dependant package.
+   - Passed the neon flags.
+   - If assembly is disabled, neon can not be enabled. To enable neon removed the disable-asm flag.
+   - remove MINI option
+   - remove dependency with alsa-lib for full compilation (disable support for input and output devices).

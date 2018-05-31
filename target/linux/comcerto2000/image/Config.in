@@ -1,0 +1,19 @@
+config TARGET_COMCERTO_RAMDISK
+	bool
+	prompt "Generate comcerto ramdisk image"
+	default n
+	select BUSYBOX_CONFIG_UBIATTACH
+	select BUSYBOX_CONFIG_UBIDETACH
+	select BUSYBOX_CONFIG_UBIMKVOL
+	select BUSYBOX_CONFIG_UBIRMVOL
+	select BUSYBOX_CONFIG_UBIRSVOL
+	select BUSYBOX_CONFIG_UBIUPDATEVOL
+	help
+	  SDK generates comcerto ram disk image.
+
+config TARGET_COMCERTO_MULTI_IMAGE
+	bool "Generate comcerto multi-image uImage"
+	default y
+	depends on TARGET_COMCERTO_RAMDISK
+	help
+	  Combine zImage and ramdisk into a single uImage

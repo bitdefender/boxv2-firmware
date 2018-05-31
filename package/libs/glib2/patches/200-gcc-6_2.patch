@@ -1,0 +1,13 @@
+Index: glib-2.43.4/glib/gdate.c
+===================================================================
+--- glib-2.43.4.orig/glib/gdate.c
++++ glib-2.43.4/glib/gdate.c
+@@ -56,6 +56,8 @@
+ #include "garray.h"
+ #endif
+ 
++#pragma GCC diagnostic ignored "-Wformat-nonliteral"
++
+ /**
+  * SECTION:date
+  * @title: Date and Time Functions

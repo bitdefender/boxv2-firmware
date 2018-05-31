@@ -1,0 +1,32 @@
+Index: squashfs4.2/squashfs-tools/mksquashfs.c
+===================================================================
+--- squashfs4.2.orig/squashfs-tools/mksquashfs.c
++++ squashfs4.2/squashfs-tools/mksquashfs.c
+@@ -25,6 +25,11 @@
+ #define FALSE 0
+ #define TRUE 1
+ 
++#ifndef _GNU_SOURCE
++#define _GNU_SOURCE
++#endif
++#include <sys/sysmacros.h>
++
+ #include <pwd.h>
+ #include <grp.h>
+ #include <time.h>
+Index: squashfs4.2/squashfs-tools/unsquashfs.c
+===================================================================
+--- squashfs4.2.orig/squashfs-tools/unsquashfs.c
++++ squashfs4.2/squashfs-tools/unsquashfs.c
+@@ -22,6 +22,11 @@
+  * unsquashfs.c
+  */
+ 
++#ifndef _GNU_SOURCE
++#define _GNU_SOURCE
++#endif
++#include <sys/sysmacros.h>
++
+ #include "unsquashfs.h"
+ #include "squashfs_swap.h"
+ #include "squashfs_compat.h"

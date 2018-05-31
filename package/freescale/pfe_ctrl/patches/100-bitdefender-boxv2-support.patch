@@ -1,0 +1,12 @@
+diff -u pfe_ctrl-13.00.1.old/pfe_eth.h pfe_ctrl-13.00.1.new/pfe_eth.h
+--- pfe_ctrl-13.00.1.old/pfe_eth.h	2016-11-27 11:09:59.290776962 +0100
++++ pfe_ctrl-13.00.1.new/pfe_eth.h	2016-11-27 11:09:37.210776743 +0100
+@@ -138,7 +138,7 @@
+ };
+ #endif
+ 
+-#define NUM_GEMAC_SUPPORT		3
++#define NUM_GEMAC_SUPPORT		2
+ #define DRV_NAME			"c2000-geth"
+ #define COMCERTO_INFOSTR_LEN		32
+ #define COMCERTO_TX_RECOVERY_TIMEOUT_MS	500

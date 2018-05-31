@@ -1,0 +1,114 @@
+diff -u u-boot-2013.01/include/configs/boxv2.h u-boot-2013.01/include/configs/boxv2.h
+--- u-boot-2013.01/include/configs/boxv2.h	2017-01-17 09:32:51.187294306 +0200
++++ u-boot-2013.01/include/configs/boxv2.h	2017-01-17 11:18:10.000000000 +0200
+@@ -215,65 +215,46 @@
+ #define CONFIG_CMD_SOCINFO
+ #define CONFIG_CMD_UPDATE_SPI
+ 
++#define CONFIG_CMD_UBI
++#define CONFIG_CMD_UBIFS
++#define CONFIG_CMD_MTDPARTS
++#define CONFIG_RBTREE
++#define CONFIG_LZO
++#define CONFIG_MTD_DEVICE
++#define CONFIG_MTD_PARTITIONS
++
+ /*
+  * Environment Configuration
+  */
+-#define CONFIG_BOOTCOMMAND	"nand read 0x3000000 0x200000 0x400000; bootm 0x3000000;"
+-#define CONFIG_BOOTARGS         "console=ttyS0,115200 "			\
+-				"init=/etc/preinit "			\
+-				"root=ubi0:rootfs "			\
+-				"ubi.mtd=3,4096 "			\
+-				"rootfstype=ubifs rw "			\
+-				"noinitrd "				\
+-				"mtdparts=comcertonand:"		\
+-					"1M(u-boot)ro,"			\
+-					"1M(env),"			\
+-					"4M(kernel),"			\
+-					"122M(rootfs),"			\
+-                                        "-(datafs) "                     \
+-				"usb3_internal_clk=yes pcie_gen1_only=yes"
+-
+-#define CONFIG_MTDPARTS		"1M(u-boot)ro,1M(env),4M(kernel),122M(rootfs),-(datafs)"
+-#define CONFIG_MTDPARTS_NAND	"mtdparts=comcertonand:1M(u-boot)ro,1M(env),4M(kernel),122M(rootfs),-(datafs)"
+-#define MTDPARTS_DEFAULT	"mtdparts=comcertonand:"CONFIG_MTDPARTS
+-
+-#define	CONFIG_EXTRA_ENV_SETTINGS											\
+-	"hostname=comcerto2000\0"											\
+-	"netdev=eth0\0"													\
+-	"nfsargs=setenv bootargs init=${init_process} root=/dev/nfs rw "						\
+-		"nfsroot=${serverip}:${rootpath}\0"									\
+-	"flashargs=setenv bootargs init=${init_process} root=/dev/mtdblock4 rootfstype=${rootfstype} rw\0"		\
+-	"rootfstype=ubifs\0"												\
+-	"init_process=/etc/preinit\0"											\
+-	"addip=setenv bootargs ${bootargs} "										\
+-		"ip=${ipaddr}:${serverip}:${gatewayip}:${netmask}"							\
+-		":${hostname}:${netdev}:off\0"										\
+-	"addeth=setenv bootargs ${bootargs} "										\
+-	"hwaddress=${netdev},${ethaddr}\0"										\
+-	"addtty=setenv bootargs ${bootargs} console=ttyS0,115200n8\0"							\
+-	"addmtd=setenv bootargs ${bootargs} ${mtdparts}\0"								\
+-	"flash_self=run flashargs addip addtty;"									\
+-		"bootm ${kernel_addr}\0"										\
+-	"boot_nfs=nfs 80600000 ${rootpath}/boot/${kernelfile};run nfsargs addeth addip addtty;"				\
+-	        "bootm 80600000\0"											\
+-	"boot_flash=run flashargs addeth addtty addmtd; bootm 0xc0080000\0"						\
+-	"boot_flashold=run flashargs addeth addtty addmtd; fsload /boot/uImage; bootm\0"				\
+-	"loadaddr=0x3000000\0"												\
+-	"rootpath=/devel/fs-c2kasic\0"											\
+-	"kernelfile=uImage\0"												\
+-	"bootfile=u-boot.bin\0"												\
+-	"mtdids=" MTDIDS_DEFAULT "\0"											\
+-	"mtdparts=" MTDPARTS_DEFAULT "\0"										\
+-	"mtddevnum=2\0"													\
+-	"mtddevname=fs\0"												\
+-	"fsfile=root.jffs2-128k\0"											\
+-	"updatefs=tftp 3000000 ${fsfile};protect off 1:36-420\;erase 1:36-420;cp.b 3000000 c0480000 ${filesize}\0"	\
+-	"updatekernel=tftp 3000000 ${kernelfile};protect off 1:4-35\;erase 1:4-35;cp.b 3000000 c0080000 ${filesize}\0"	\
+-	"updateboot=tftp 3000000 ${bootfile};protect off 1:1-3\;erase 1:1-3;cp.b 3000000 c0020000 ${filesize}\0"	\
+-	"updateuloader=tftp 3000000 uloader.bin;protect off 1:0-1\;erase 1:0-1;cp.b 3000000 c0000000 ${filesize}\0"	\
+-	"updatefs_nand=tftp 0000000 ${fsfile}; nand erase.part rootfs; nand write.trimffs ${fileaddr} rootfs ${filesize}\0"		\
+-	"updatekernel_nand=tftp 3000000 ${kernelfile}; nand erase.part kernel; nand write ${fileaddr} kernel ${filesize}\0"\
+-	"updateboot_nand=tftp 3000000 ${bootfile}; nand erase.part u-boot; nand write ${fileaddr} u-boot ${filesize}\0"	\
++#define CONFIG_BOOTARGS \
++	"console=ttyS0,115200 " \
++	"init=/etc/preinit " \
++	"root=ubi0:rootfs " \
++	"ubi.mtd=${root_mtd} " \
++	"rootfstype=${rootfstype} "\
++	"rw " \
++	"noinitrd " \
++	"usb3_internal_clk=yes pcie_gen1_only=yes " \
++	"${mtdparts}"
++#define CONFIG_BOOTCOMMAND "env set bootargs " CONFIG_BOOTARGS "; nand read ${kernel_loadaddr} ${kernel_mtd}; bootm ${kernel_loadaddr};"
++
++#define CONFIG_MTDPARTS        "1M(u-boot)ro,1M(env),4M(kernelR),256M(rootR),4M(kernelA),512M(rootA),4M(kernelB),512M(rootB),512M(data)"
++#define CONFIG_MTDPARTS_NAND   "mtdparts=comcertonand:"CONFIG_MTDPARTS
++#define MTDPARTS_DEFAULT       CONFIG_MTDPARTS_NAND
++
++#define CONFIG_EXTRA_ENV_SETTINGS \
++	"hostname=boxv2\0" \
++	"rootfstype=ubifs\0" \
++	"loadaddr=0x20000000\0" \
++	"kernel_loadaddr=0x3000000\0" \
++	"mtdids=" MTDIDS_DEFAULT "\0" \
++	"mtdparts=" MTDPARTS_DEFAULT "\0" \
++	"kernel_mtd=kernelA\0" \
++	"kernel_tftp_file=uImage\0" \
++	"root_mtd=rootA\0" \
++	"root_tftp_file=root-ubi\0" \
++	"update_kernel=tftp ${loadaddr} ${kernel_tftp_file}; nand erase.part ${kernel_mtd}; nand write ${loadaddr} ${kernel_mtd} 0x${filesize};\0" \
++	"update_root=tftp ${loadaddr} ${root_tftp_file}; nand erase.part ${root_mtd}; nand write.trimffs ${loadaddr} ${root_mtd} 0x${filesize};\0" \
+ 	""
+ 
+ #define CONFIG_ETHADDR		00:aa:bb:cc:dd:ee
+@@ -289,4 +270,7 @@
+ //#define CONFIG_INITRD_TAG		1
+ 
++#undef CONFIG_SYS_MALLOC_LEN
++#define CONFIG_SYS_MALLOC_LEN 0x800000
++
+ #endif /* __CONFIG_BOXV2_H */
+ 

@@ -1,0 +1,9 @@
+SOURCE:https://github.com/openwrt/packages/tree/for-15.05/libs/libxml2
+MORE INFO:
+commit 088c1a12beaae911219e03d9235e768b641399f0
+
+	Merge pull request #1794 from MikePetullo/for-15.05-lighttpd
+
+SUPPORT : libxml2 library.
+CHANGES:
+No Changes

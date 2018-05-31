@@ -1,0 +1,13 @@
+CHANGES:
+1. netsupport.mk
+	- xfrm_algo module does not copy if kernel version is 3.2.
+2. other.mk
+    - Reduced CONFIG_SERIAL_8250_NR_UARTS value for CONFIG_TARGET_ls1012a
+3. crypto.mk
+    - updated crypto ocf kernel package enabled kernel modules list. These 
+	changes brought from ls1024 3.2 kernel sdk.
+4. netfilter.mk
+    - kmod-bridge dependancy removed for LS1024 architecture for ebtable module.
+	bridge module is enabling IGMP_SNOOPING, due to this while booting it is 
+        hanging. This need to be handled when IGMP_SNOOPING support requires.
+      

@@ -1,0 +1,72 @@
+#!/bin/sh
+##################################################################
+
+#. /usr/lib/webif/webif.sh
+. /etc/functions.sh
+uci_load "asterisk"
+
+config_get board general board_name
+config_get proslic_phones general proslic_phones  
+config_get legerity_phones general legerity_phones  
+config_get band general band
+
+if [ "$band" = "narrow" ]; then
+    tdm_coding=2
+elif [ "$band" = "wide" ]; then
+    tdm_coding=4
+else
+    echo "TDM band mode is not set correctly"
+    exit 1
+fi
+
+if [ $proslic_phones -gt 0 ]; then
+    phone=0
+    while [ "$phone" -lt "$proslic_phones" ]; do
+        echo $tdm_coding > /proc/proslic/pots$phone/tdm_coding
+        phone=`expr $phone + 1`
+    done
+fi
+
+if [ "$1" = "tdm_coding" ]; then
+    # Only TDM coding must be changed. Don't change TS settings
+    exit 0
+fi
+
+####################### Timeslots ################################
+
+timeslot=0
+
+if [ $proslic_phones -gt 0 ]; then
+    phone=0
+    while [ "$phone" -lt "$proslic_phones" ]; do
+        echo -1 > /proc/proslic/pots$phone/timeslot
+        phone=`expr $phone + 1`
+    done
+
+    phone=0
+    while [ "$phone" -lt "$proslic_phones" ]; do
+        echo $timeslot > /proc/proslic/pots$phone/timeslot            
+        phone=`expr $phone + 1`
+        timeslot=`expr $timeslot + 2`
+    done
+fi
+
+if [ $legerity_phones -gt 0 ]; then
+    phone=0
+    while [ "$phone" -lt "$legerity_phones" ]; do
+        echo -1 > /proc/legerity/pots$phone/timeslot
+        phone=`expr $phone + 1`
+    done
+
+    if [ $timeslot -eq 0 ] && ([ "$board" = "c2kasic" ] || [ "$board" = "c2kmfcnevm" ] || [ "$board" = "c2kevm" ]); then
+	# Legerity ZSI device doesn't work on timeslot 0 - this is ZSI operation restriction
+	timeslot=1
+    fi
+
+    phone=0
+    while [ "$phone" -lt "$legerity_phones" ]; do
+        echo $timeslot > /proc/legerity/pots$phone/timeslot            
+        phone=`expr $phone + 1`
+        timeslot=`expr $timeslot + 2`
+    done
+fi

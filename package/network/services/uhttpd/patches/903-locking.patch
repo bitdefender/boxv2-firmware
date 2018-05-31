@@ -1,0 +1,102 @@
+Index: uhttpd-2015-11-08/lua.c
+===================================================================
+--- uhttpd-2015-11-08.orig/lua.c
++++ uhttpd-2015-11-08/lua.c
+@@ -23,6 +23,7 @@
+ #include <lualib.h>
+ #include <stdio.h>
+ #include <poll.h>
++#include <sys/file.h>
+ 
+ #include "uhttpd.h"
+ #include "plugin.h"
+@@ -133,6 +134,70 @@ exit:
+ 	return 1;
+ }
+ 
++static int lock_file(int *fd, const char *filename, const int flags)
++{
++	int rc = -1;
++
++	if (*fd == -1) {
++		*fd = open(filename, O_CREAT | O_RDWR | O_CLOEXEC, 0644);
++		if (*fd == -1)
++			goto exit;
++
++		while (1) {
++			rc = flock(*fd, flags);
++			if ((rc == -1) && (errno == EINTR))
++				continue;
++			else
++				break;
++		}
++	}
++
++exit:
++	return rc;
++}
++
++static void unlock_file(int *fd, const char *filename)
++{
++	if (*fd >= 0) {
++		flock(*fd, LOCK_UN);
++		close(*fd);
++		*fd = -1;
++		unlink(filename);
++	}
++}
++
++static int cmd_lock_fd = -1;
++static const char *cmd_lock_filename = "/opt/bitdefender/var/tmp/ws_cmd.lock";
++
++static int uh_lua_cmd_lock(lua_State *L)
++{
++	int rc = lock_file(&cmd_lock_fd, cmd_lock_filename, LOCK_EX | LOCK_NB);
++	lua_pushnumber(L, rc);
++	return 1;
++}
++
++static int uh_lua_cmd_unlock(lua_State *L)
++{
++	unlock_file(&cmd_lock_fd, cmd_lock_filename);
++	return 0;
++}
++
++static int state_lock_fd = -1;
++static const char *state_lock_filename = "/opt/bitdefender/var/tmp/ws_state.lock";
++
++static int uh_lua_state_lock(lua_State *L)
++{
++	int rc = lock_file(&state_lock_fd, state_lock_filename, LOCK_EX);
++	lua_pushnumber(L, rc);
++	return 1;
++}
++
++static int uh_lua_state_unlock(lua_State *L)
++{
++	unlock_file(&state_lock_fd, state_lock_filename);
++	return 0;
++}
++
+ static int uh_lua_recv(lua_State *L)
+ {
+ 	static struct pollfd pfd = {
+@@ -260,6 +325,18 @@ static lua_State *uh_lua_state_init(void
+ 	lua_pushcfunction(L, uh_lua_recv_file);
+ 	lua_setfield(L, -2, "recv_file");
+ 
++	lua_pushcfunction(L, uh_lua_cmd_lock);
++	lua_setfield(L, -2, "cmd_lock");
++
++	lua_pushcfunction(L, uh_lua_cmd_unlock);
++	lua_setfield(L, -2, "cmd_unlock");
++
++	lua_pushcfunction(L, uh_lua_state_lock);
++	lua_setfield(L, -2, "state_lock");
++
++	lua_pushcfunction(L, uh_lua_state_unlock);
++	lua_setfield(L, -2, "state_unlock");
++
+ 	lua_pushcfunction(L, uh_lua_urldecode);
+ 	lua_setfield(L, -2, "urldecode");
+ 

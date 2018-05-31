@@ -1,0 +1,13 @@
+Index: procd-2015-08-16/initd/early.c
+===================================================================
+--- procd-2015-08-16.orig/initd/early.c
++++ procd-2015-08-16/initd/early.c
+@@ -73,7 +73,7 @@ early_mounts(void)
+ 
+ 	early_console("/dev/console");
+ 	if (mount_zram_on_tmp())
+-		mount("tmpfs", "/tmp", "tmpfs", MS_NOSUID | MS_NODEV | MS_NOATIME, NULL);
++		mount("tmpfs", "/tmp", "tmpfs", MS_NOSUID | MS_NODEV | MS_NOATIME, "size=128M");
+ 	else
+ 		mkdev("*", 0600);
+ 	mkdir("/tmp/run", 0777);

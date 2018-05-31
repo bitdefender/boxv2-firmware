@@ -1,0 +1,15 @@
+--- a/libiberty/obstack.c	2017-07-18 16:23:22.325866495 +0300
++++ a/libiberty/obstack.c	2017-07-18 16:22:35.818689571 +0300
+@@ -43,9 +43,9 @@
+ #include <stdio.h>		/* Random thing to get __GNU_LIBRARY__.  */
+ #if !defined (_LIBC) && defined (__GNU_LIBRARY__) && __GNU_LIBRARY__ > 1
+ #include <gnu-versions.h>
+-#if _GNU_OBSTACK_INTERFACE_VERSION == OBSTACK_INTERFACE_VERSION
+-#define ELIDE_CODE
+-#endif
++//#if _GNU_OBSTACK_INTERFACE_VERSION == OBSTACK_INTERFACE_VERSION
++//#define ELIDE_CODE
++//#endif
+ #endif
+ 
+ 

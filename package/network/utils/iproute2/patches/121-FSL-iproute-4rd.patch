@@ -1,0 +1,268 @@
+diff -Naur iproute2-4.0.0_2/include/linux/if_tunnel.h iproute2-4.0.0_2_mod/include/linux/if_tunnel.h
+--- iproute2-4.0.0_2/include/linux/if_tunnel.h	2015-11-02 12:32:42.119610000 +0530
++++ iproute2-4.0.0_2_mod/include/linux/if_tunnel.h	2015-11-03 16:33:10.369829000 +0530
+@@ -17,6 +17,10 @@
+ #define SIOCADD6RD      (SIOCDEVPRIVATE + 9)
+ #define SIOCDEL6RD      (SIOCDEVPRIVATE + 10)
+ #define SIOCCHG6RD      (SIOCDEVPRIVATE + 11)
++#define SIOCGET4RD      (SIOCDEVPRIVATE + 12)  /* 4rd */
++#define SIOCADD4RD      (SIOCDEVPRIVATE + 13)  /* 4rd */
++#define SIOCDEL4RD      (SIOCDEVPRIVATE + 14)  /* 4rd */
++#define SIOCCHG4RD      (SIOCDEVPRIVATE + 15)  /* 4rd */
+ 
+ #define GRE_CSUM	__cpu_to_be16(0x8000)
+ #define GRE_ROUTING	__cpu_to_be16(0x4000)
+@@ -37,6 +41,23 @@
+ 	struct iphdr		iph;
+ };
+ 
++/* 4rd start */
++
++struct ip6_tnl_4rd {
++	__be32                  prefix;
++	struct in6_addr         relay_prefix;
++	struct in6_addr         relay_suffix;
++	__u16                   prefixlen;
++	__u16                   relay_prefixlen;
++	__u16                   relay_suffixlen;
++	__u16                   psid_offsetlen;
++	__u16                   eabit_len;
++	__u16                   entry_num;
++};
++
++/* 4rd end */
++
++
+ enum {
+ 	IFLA_IPTUN_UNSPEC,
+ 	IFLA_IPTUN_LINK,
+diff -Naur iproute2-4.0.0_2/ip/ip6tunnel.c iproute2-4.0.0_2_mod/ip/ip6tunnel.c
+--- iproute2-4.0.0_2/ip/ip6tunnel.c	2015-11-03 16:35:10.410044000 +0530
++++ iproute2-4.0.0_2_mod/ip/ip6tunnel.c	2015-11-03 16:50:39.918103000 +0530
+@@ -47,12 +47,18 @@
+ 
+ static void usage(void)
+ {
+-	fprintf(stderr, "Usage: ip -f inet6 tunnel { add | change | del | show } [ NAME ]\n");
++	fprintf(stderr, "Usage: ip -f inet6 tunnel { add | change | del | show | 4rd } [ NAME ]\n"); /* GR22-V4.1(15-01-01) C */
+ 	fprintf(stderr, "          [ mode { ip6ip6 | ipip6 | ip6gre | vti6 | any } ]\n");
+ 	fprintf(stderr, "          [ remote ADDR local ADDR ] [ dev PHYS_DEV ]\n");
+ 	fprintf(stderr, "          [ encaplimit ELIM ]\n");
+ 	fprintf(stderr ,"          [ hoplimit TTL ] [ tclass TCLASS ] [ flowlabel FLOWLABEL ]\n");
+ 	fprintf(stderr, "          [ dscp inherit ]\n");
++	/* 4rd start */
++	fprintf(stderr, "          [ 4rd-entry NUM ]\n");
++	fprintf(stderr, "          [ 4rd-prefix V4ADDR ] [ 4rd-relay_prefix V6ADDR ] [ 4rd-relay_suffix V6ADDR ]\n");
++	fprintf(stderr, "          [ 4rd-offset LEN1 ] [ 4rd-eabit LEN2 ] \n");
++	fprintf(stderr, "          [ 4rd-reset ]\n");
++	/* 4rd end */
+ 	fprintf(stderr, "          [ [i|o]seq ] [ [i|o]key KEY ] [ [i|o]csum ]\n");
+ 	fprintf(stderr, "\n");
+ 	fprintf(stderr, "Where: NAME      := STRING\n");
+@@ -63,6 +69,13 @@
+ 		DEFAULT_TNL_HOP_LIMIT);
+ 	fprintf(stderr, "       TCLASS    := { 0x0..0xff | inherit }\n");
+ 	fprintf(stderr, "       FLOWLABEL := { 0x0..0xfffff | inherit }\n");
++	/* 4rd start */
++	fprintf(stderr, "       NUM       := 0..255\n");
++	fprintf(stderr, "       V4ADDR    := IPV4_ADDRESS/PREFIX\n");
++	fprintf(stderr, "       V6ADDR    := IPV6_ADDRESS/PREFIX\n");
++	fprintf(stderr, "       LEN1      := 0..16\n");
++	fprintf(stderr, "       LEN2      := 0..64\n");
++	/* 4rd end */
+ 	fprintf(stderr, "       KEY       := { DOTTED_QUAD | NUMBER }\n");
+ 	exit(-1);
+ }
+@@ -496,6 +509,137 @@
+ 	return tnl_del_ioctl(basedev, p.name, &p);
+ }
+ 
++
++/* 4rd start */
++static int do_4rd(int argc, char **argv)
++{
++	struct ip6_tnl_4rd ip4rd;
++	int devname = 0;
++	int cmd = 0;
++	char medium[IFNAMSIZ];
++	inet_prefix prefix;
++
++	memset(&ip4rd, 0, sizeof(ip4rd));
++	memset(&medium, 0, sizeof(medium));
++
++	while (argc > 0) {
++		if (strcmp(*argv, "4rd-prefix") == 0) {
++			NEXT_ARG();
++			if (get_prefix(&prefix, *argv, AF_INET))
++				invarg("invalid 4rd-prefix\n", *argv);
++			cmd = SIOCADD4RD;
++			memcpy(&ip4rd.prefix, prefix.data, 4);
++			ip4rd.prefixlen = prefix.bitlen;
++		} else if (strcmp(*argv, "4rd-relay_prefix") == 0) {
++			NEXT_ARG();
++			if (get_prefix(&prefix, *argv, AF_INET6))
++				invarg("invalid 4rd-relay_prefix\n", *argv);
++			cmd = SIOCADD4RD;
++			memcpy(&ip4rd.relay_prefix, prefix.data, 16);
++			ip4rd.relay_prefixlen = prefix.bitlen;
++		} else if (strcmp(*argv, "4rd-relay_suffix") == 0) {
++			NEXT_ARG();
++			if (get_prefix(&prefix, *argv, AF_INET6))
++				invarg("invalid 4rd-relay_suffix\n", *argv);
++			cmd = SIOCADD4RD;
++			memcpy(&ip4rd.relay_suffix, prefix.data, 16);
++			ip4rd.relay_suffixlen = prefix.bitlen;
++		} else if (strcmp(*argv, "4rd-entry") == 0) {
++			NEXT_ARG();
++			__u16 uval;
++			if (get_u16(&uval, *argv, 10))
++				invarg("invalid 4rd-entry", *argv);
++			ip4rd.entry_num = uval ;
++		} else if (strcmp(*argv, "4rd-offset") == 0) {
++			NEXT_ARG();
++			__u16 uval;
++			if (get_u16(&uval, *argv, 10))
++				invarg("invalid 4rd-offset", *argv);
++			cmd = SIOCADD4RD;
++			ip4rd.psid_offsetlen = uval ;
++		} else if (strcmp(*argv, "4rd-eabit") == 0) {
++			NEXT_ARG();
++			__u16 uval;
++			if (get_u16(&uval, *argv, 10))
++				invarg("invalid 4rd-eabit", *argv);
++			cmd = SIOCADD4RD;
++			ip4rd.eabit_len = uval ;
++		} else if (strcmp(*argv, "4rd-reset") == 0) {
++			cmd = SIOCDEL4RD;
++		} else if (strcmp(*argv, "dev") == 0) {
++			NEXT_ARG();
++			strncpy(medium, *argv, IFNAMSIZ-1);
++			devname++;
++		} else {
++			fprintf(stderr, "%s: Invalid 4RD parameter.\n", *argv);
++			exit(-1);
++		}
++		argc--; argv++;
++	}
++	if (devname == 0) {
++		fprintf(stderr, "Must specify dev.\n");
++		exit(-1);
++	}
++
++	return tnl_4rd_ioctl(cmd, medium, &ip4rd);
++}
++
++static int do_4rdshow(int argc, char **argv)
++{
++	struct ip6_tnl_4rd mr[256];
++	struct ip6_tnl_parm2 p;
++	int num;
++
++	memset(mr, 0, sizeof(mr));
++	ip6_tnl_parm_init(&p, 0);
++	p.proto = 0;
++
++	if (parse_args(argc, argv, SIOCGET4RD, &p) < 0)
++		return -1;
++
++	if (!p.name[0]) {
++		return -1;
++	}
++
++	if (tnl_ioctl_get_4rd(p.name, mr)) {
++		return -1;
++	}
++	
++	for(num=0; num<=256; num++){
++		printf("%03d: %03d %02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x/%03d "
++				"%03d.%03d.%03d.%03d/%02d %02d %02d\n",
++		num+1,
++		mr[num].entry_num,
++		mr[num].relay_prefix.s6_addr[0],
++		mr[num].relay_prefix.s6_addr[1],
++		mr[num].relay_prefix.s6_addr[2],
++		mr[num].relay_prefix.s6_addr[3],
++		mr[num].relay_prefix.s6_addr[4],
++		mr[num].relay_prefix.s6_addr[5],
++		mr[num].relay_prefix.s6_addr[6],
++		mr[num].relay_prefix.s6_addr[7],
++		mr[num].relay_prefix.s6_addr[8],
++		mr[num].relay_prefix.s6_addr[9],
++		mr[num].relay_prefix.s6_addr[10],
++		mr[num].relay_prefix.s6_addr[11],
++		mr[num].relay_prefix.s6_addr[12],
++		mr[num].relay_prefix.s6_addr[13],
++		mr[num].relay_prefix.s6_addr[14],
++		mr[num].relay_prefix.s6_addr[15],
++		mr[num].relay_prefixlen,
++		(ntohl(mr[num].prefix) >> 24) & 0xff,
++		(ntohl(mr[num].prefix) >> 16) & 0xff,
++		(ntohl(mr[num].prefix) >> 8) & 0xff,
++		ntohl(mr[num].prefix) & 0xff,
++		mr[num].prefixlen,
++		mr[num].eabit_len,
++		mr[num].psid_offsetlen);
++	}
++	return 0;
++}
++
++/* 4rd end */
++
+ int do_ip6tunnel(int argc, char **argv)
+ {
+ 	switch (preferred_family) {
+@@ -520,6 +664,12 @@
+ 		    matches(*argv, "lst") == 0 ||
+ 		    matches(*argv, "list") == 0)
+ 			return do_show(argc - 1, argv + 1);
++		/* 4rd start */
++		if (matches(*argv, "4rd") == 0)
++			return do_4rd(argc - 1, argv + 1);
++		if (matches(*argv, "4rdshow") == 0)
++			return do_4rdshow(argc - 1, argv + 1);
++		/* 4rd I end */
+ 		if (matches(*argv, "help") == 0)
+ 			usage();
+ 	} else
+diff -Naur iproute2-4.0.0_2/ip/tunnel.c iproute2-4.0.0_2_mod/ip/tunnel.c
+--- iproute2-4.0.0_2/ip/tunnel.c	2015-11-02 12:32:42.334598000 +0530
++++ iproute2-4.0.0_2_mod/ip/tunnel.c	2015-11-03 16:33:10.374818000 +0530
+@@ -150,11 +150,25 @@
+ 	return tnl_gen_ioctl(cmd, name, p, -1);
+ }
+ 
++/* 4rd start */
++int tnl_4rd_ioctl(int cmd, const char *name, void *p)
++{
++	return tnl_gen_ioctl(cmd, name, p, -1);
++}
++/* 4rd end */
++
+ int tnl_6rd_ioctl(int cmd, const char *name, void *p)
+ {
+ 	return tnl_gen_ioctl(cmd, name, p, -1);
+ }
+ 
++/* 4rd start */
++int tnl_ioctl_get_4rd(const char *name, void *p)
++{
++	return tnl_gen_ioctl(SIOCGET4RD, name, p, -1);
++}
++/* 4rd end */
++
+ int tnl_ioctl_get_6rd(const char *name, void *p)
+ {
+ 	return tnl_gen_ioctl(SIOCGET6RD, name, p, EINVAL);
+diff -Naur iproute2-4.0.0_2/ip/tunnel.h iproute2-4.0.0_2_mod/ip/tunnel.h
+--- iproute2-4.0.0_2/ip/tunnel.h	2015-11-02 12:32:42.335600000 +0530
++++ iproute2-4.0.0_2_mod/ip/tunnel.h	2015-11-03 16:33:10.375840000 +0530
+@@ -29,7 +29,9 @@
+ int tnl_add_ioctl(int cmd, const char *basedev, const char *name, void *p);
+ int tnl_del_ioctl(const char *basedev, const char *name, void *p);
+ int tnl_prl_ioctl(int cmd, const char *name, void *p);
++int tnl_4rd_ioctl(int cmd, const char *name, void *p);  /* 4rd */
+ int tnl_6rd_ioctl(int cmd, const char *name, void *p);
++int tnl_ioctl_get_4rd(const char *name, void *p);       /* 4rd */
+ int tnl_ioctl_get_6rd(const char *name, void *p);
+ 
+ #endif
